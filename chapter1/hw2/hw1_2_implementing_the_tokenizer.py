@@ -187,7 +187,10 @@ class implement_bpe_tokenizer:
             if token in self._vocab:
                 encoded_ids.append(self._bytes_to_id[token])
             else:
-                encoded_ids.extend(self._bpe_encode_segment(token))
+                # encoded_ids.extend(self._bpe_encode_segment(token))
+                # 上述代码存在问题，修改为拆分为单字节
+                for byte in token:
+                    encoded_ids.append(self._bytes_to_id[bytes([byte])])
         return encoded_ids
 
 
