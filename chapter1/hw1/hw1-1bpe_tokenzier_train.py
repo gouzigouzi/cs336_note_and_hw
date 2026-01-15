@@ -136,9 +136,9 @@ def run_train_bpe(
     # 对语料库里的文段进行简单的预分词：注意按要求要保留空格分割文本，得到“单词”列表["hello"," world"]
     # raw_words: List[str] = text.split()
     raw_words: List[str] = re.findall(r'\s*\S+', text)
+
     # 然后把“单词”转换为初始的unicode字符序列,[[u'h', u'e', u'l', u'l', u'o'], [u'w', u'o', u'r', u'l', u'd']]
     unicode_sequences: List[List[str]] = []
-
     for word_str in raw_words:
         word_as_raw_bytes: bytes = word_str.encode("utf-8") # 把每个单词都转为字节串形式
         if not word_as_raw_bytes: # 跳过空字符串（可能由多个连续空格产生）
