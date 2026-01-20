@@ -399,8 +399,211 @@ b'the' + b' c' + b'a' + b't' + b' at' + b'e'
 
 我们将实现“预归一化”（pre-norm）Transformer块（详见第3.5节），这种结构额外要求在最后一个Transformer块之后使用层归一化（Layer Normalization，详见下文），以确保输出具有适当的尺度。
 
-在此归一化之后，我们将使用一个标准的可学习线性变换，将 Transformer 块的输出转换为预测的下一个标记的 logits（参见例如 Radford 等 [2018] 的公式2，如下所示）。
+在此归一化之后，我们将使用一个标准的可学习线性变换，将 Transformer 块的输出转换为预测的下一个标记的 logits，参见例如 Radford 等 [2018] 的公式2，如下所示:
+$$\mathrm{FFN}(x) = \max(0, xW_1 + b_1)\,W_2 + b_2.$$
 
-$\mathrm{FFN}(x) = \max(0, xW_1 + b_1)\,W_2 + b_2$
+### 3.3 备注：批处理、Einsum 与高效计算
+在整个 Transformer 模型中，我们会对许多类似批次的输入执行相同的计算。以下是一些例子：
+- 批次中的元素：我们对每个批次中的样本都应用相同的 Transformer 前向操作。
+- 序列长度：像 RMSNorm 和前馈网络这样的“逐位置”（position-wise）操作，在序列的每个位置上都以相同方式执行。
+- 注意力头：在“多头注意力”机制中，注意力操作会在多个注意力头之间进行批处理。
+
+因此，我们需要一种使用方便且高效的方式来执行这些操作，既能充分利用 GPU 的并行计算能力，又便于阅读和理解。许多 PyTorch 操作可以接受张量前端额外的“类批次”维度，并高效地在这些维度上重复或广播操作。
+
+例如，假设我们要执行一个逐位置的批处理操作。我们有一个数据张量 D，其形状为 (batch_size, sequence_length, d_model)，并希望将其与一个形状为 (d_model, d_model) 的矩阵 A 进行批量向量-矩阵乘法。在这种情况下，D @ A 会自动执行批量矩阵乘法，这是 PyTorch 中一种高效的原语操作，其中 (batch_size, sequence_length) 维度被视为批处理维度。
+
+正因为如此，最好假设你的函数可能会接收到额外的类批次维度，并始终将这些维度保留在 PyTorch 张量形状的最前面。为了组织张量以便能够以这种方式进行批处理，可能需要多次使用 view、reshape 和 transpose 操作来调整形状。这可能会比较繁琐，也常常导致代码难以阅读，且难以追踪张量的实际形状。
+
+更便捷的选择是使用 torch.einsum 中的 einsum 记法，或采用框架无关的库如 einops 或 einx。两个核心操作是：
+- **einsum**：可对任意维度的张量进行缩并（tensor contraction）；
+- **rearrange**：可重新排列、拼接或分割张量维度。
+
+事实上，机器学习中的大多数操作都可以归结为**维度变换**和**张量缩并**，外加偶尔的（通常是逐元素的）非线性函数。这意味着使用 einsum 记法可使代码更清晰、灵活。
+
+我们强烈建议在课程中学习并使用 einsum 记法：
+
+初学者请使用 einopshttps://einops.rocks/1-einops-basics/%EF%BC%9B
+熟悉 einops 的同学可进一步学习更通用的 einx。
+
+以下是一些使用 einsum 记法的示例，作为 einops 文档的补充。
+
+```python
+import torch
+from einops import rearrange, einsum
+```
+
+计算张量 D（形状 [batch, seq, d_in]）和矩阵 A（形状 [d_out, d_in]）的乘积，结果应为 [batch, seq, d_out]。
+1. **基础方法**：@ 运算符直接计算，需手动转置 A
+2. **显式维度**：einops 第一种写法明确命名所有维度（如 batch seq d_in），可读性最佳
+3. **省略号语法**：... d_in 自动匹配前置维度，适合高维张量（如后续的多头注意力案例）
+
+验证部分通过 `torch.allclose` 确认所有方法数值等价。最后扩展展示了多头注意力场景，其中 ... 语法能优雅处理 [batch, heads, seq, dim] 的复杂维度，避免了繁琐的维度命名。einops 的优势在于：**维度意图更直观**，且省略号写法**泛用性更强**，特别适合深度学习中的高维张量操作。
+
+```python
+# 设定随机种子保证可复现性
+torch.manual_seed(42)
+
+# 定义输入张量
+batch_size = 3
+seq_len = 5
+d_in = 4
+d_out = 2
+
+# 创建测试数据
+D = torch.randn(batch_size, seq_len, d_in)  # 形状: [batch, sequence, d_in]
+A = torch.randn(d_out, d_in)                # 形状: [d_out, d_in]
+
+# 方法1: 使用普通矩阵乘法 @
+Y_matmul = D @ A.T                          # A.T形状变为 [d_in, d_out]
+print("矩阵乘法结果形状:", Y_matmul.shape)  # 输出: [batch, sequence, d_out]
+
+# 方法2: 使用torch.einsum
+Y_torch = torch.einsum("b s i, o i -> b s o", D, A)
+print("torch.einsum结果形状:", Y_torch.shape)
+
+# 方法3: 使用einops.einsum (第一种形式)
+Y_einops1 = einsum(D, A, "batch seq d_in, d_out d_in -> batch seq d_out")
+print("einops形式1结果形状:", Y_einops1.shape)
+
+# 方法4: 使用einops.einsum (第二种形式，使用...)
+Y_einops2 = einsum(D, A, "... d_in, d_out d_in -> ... d_out")
+print("einops形式2结果形状:", Y_einops2.shape)
+```
+矩阵乘法结果形状: torch.size([3, 5, 2])
+torch.einsum结果形状: torch.size([3, 5, 2])
+einops形式1结果形状: torch.size([3, 5, 2])
+einops形式2结果形状: torch.size([3, 5, 2])
+
+```python
+import torch
+from einops import rearrange, einsum
+
+# 示例（einstein_example2）：使用 einops.rearrange 进行广播操作
+
+# 生成一批图像和一组缩放因子
+images = torch.randn(64, 128, 128, 3)  # (batch, height, width, channel)，表示 64 张 128x128 的 RGB 图像
+dim_by = torch.linspace(start=0.0, end=1.0, steps=10)  # (10,)，生成 10 个从 0 到 1 的亮度缩放因子
+
+print("输入张量形状:")
+print("images.shape:", images.shape)        # torch.Size([64, 128, 128, 3])
+print("dim_by.shape:", dim_by.shape)        # torch.Size([10])
+
+# 方法 1：通过 reshape 和乘法实现广播
+dim_value = rearrange(dim_by, "dim_value -> 1 dim_value 1 1 1")  # 扩展为 (1, 10, 1, 1, 1)
+images_rearr = rearrange(images, "b height width channel -> b 1 height width channel")  # (64, 1, 128, 128, 3)
+dimmed_images_v1 = images_rearr * dim_value  # 广播相乘
+print("\n方法1结果:")
+print("dim_value.shape:", dim_value.shape)           # torch.Size([1, 10, 1, 1, 1])
+print("images_rearr.shape:", images_rearr.shape)     # torch.Size([64, 1, 128, 128, 3])
+print("dimmed_images_v1.shape:", dimmed_images_v1.shape)  # torch.Size([64, 10, 128, 128, 3])
+
+# 方法 2：使用 einsum 一步完成
+dimmed_images_v2 = einsum(
+    images, dim_by,
+    "batch height width channel, dim_value -> batch dim_value height width channel"
+)
+
+print("\n方法2结果:")
+print("dimmed_images_v2.shape:", dimmed_images_v2.shape)  # torch.Size([64, 10, 128, 128, 3])
+```
+输入张量形状:
+images.shape: torch.Size([64, 128, 128, 3])
+dim_by.shape: torch.Size([10])
+
+方法1结果:
+dim_value.shape: torch.Size([1, 10, 1, 1, 1])
+images_rearr.shape: torch.Size([64, 1, 128, 128, 3])
+dimmed_images_v1.shape: torch.Size([64, 10, 128, 128, 3])
+
+方法2结果:
+dimmed_images_v2.shape: torch.Size([64, 10, 128, 128, 3])
+
+### 3.4 基本构建模块：线性层和嵌入层
+#### 3.4.1 参数初始化
+正确的参数初始化非常重要。我们采用以下初始化规则：
+- **线性层权重**：$W_{ij} \sim \mathcal{N}(0,\sigma^2)$，其中 $\sigma^2=\frac{2}{d_{\text{in}}+d_{\text{out}}}$，并截断至 $\pm 3\sigma$ 范围内。
+- **嵌入层（Embeddings）**：每个元素从 $\mathcal{N}(0,1)$ 中采样，并截断到区间 $[-3,3]$。
+- **RMSNorm 缩放参数（gains）**：全部初始化为1。
+
+在 PyTorch 中，可以使用 `torch.nn.init.trunc_normal_` 来初始化权重。
+
+#### 3.4.2 线性模块（Linear Module）
+线性模块执行矩阵乘法操作。我们实现一个自定义的 Linear 类（继承自 `torch.nn.Module`），不包含偏置项。其前向传播计算为：
+$$y=Wx,$$
+
+```python
+import torch
+import torch.nn as nn
+input_dim = 16384
+hidden_dim = 32
+w = nn.Parameter(torch.randn(input_dim,hidden_dim))
+x = nn.Parameter(torch.randn(input_dim))
+output = x @ w
+output
+```
+tensor([ 285.3951,  210.2427,   34.5771,  -46.3320,   95.1141, -115.6904,
+        -154.2949,  -60.1955,   50.3835,  228.9332, -253.0125,  183.3314,
+        -226.0321,  -34.4998,   98.7434, -162.0564, -116.2524,  182.7540,
+         -36.6848,   -2.1386,   46.6291,  220.2971, -149.2908,  -96.5421,
+         -56.3646,    7.7230,    9.7287,  172.0354,  124.5273,  120.1974,
+         204.0635, -156.1456], grad_fn=<SqueezeBackward4>)
+
+```python
+import numpy as np
+w = nn.Parameter(torch.randn(input_dim,hidden_dim) / np.sqrt(input_dim))
+output = x @ w
+output
+```
+tensor([-1.1294,  0.0739, -0.0756, -1.2595,  0.1013,  0.4984,  0.4841, -0.3894,
+        -0.8523,  0.5237, -0.3436,  0.5862, -0.0189, -0.2259, -0.7464, -0.1600,
+        -0.0633,  1.0717, -1.0403, -1.0870, -0.1722, -0.2335, -0.3526, -1.3660,
+         1.1142,  1.1098,  0.9295, -0.8007, -0.7902, -0.7361,  1.3478, -0.2251],
+       grad_fn=<SqueezeBackward4>)
+
+**问题（1分）实现线性模块**
+交付内容：实现一个继承自 torch.nn.Module 的 Linear 类，执行线性变换。你的实现应遵循 PyTorch 内置的 nn.Linear 模块的接口，但不需要支持 bias（偏置）参数。
+我们推荐以下接口：
+`def __init__(self, in_features, out_features, device=None, dtype=None)`
+构造一个线性变换模块。该函数应接受以下参数：
+- in_features: int，输入张量的最后一个维度大小
+- out_features: int，输出张量的最后一个维度大小
+- device: torch.device | None = None，用于存储参数的设备
+- dtype: torch.dtype | None = None，参数的数据类型
+
+`def forward(self, x: torch.Tensor) -> torch.Tensor`
+对输入 x 应用线性变换并返回结果。
+注意事项：
+- 必须继承 nn.Module
+- 在 `__init__` 中调用父类构造函数（即 `super().__init__()`）
+- 创建并存储你的权重参数 W（注意：是 W 而不是 W⊤，出于内存布局的考虑），并将 W 包装为 `nn.Parameter`
+- 不能使用 `nn.Linear` 或 `nn.functional.linear`
+- 权重初始化：使用 `torch.nn.init.trunc_normal_` 函数进行初始化
+
+代码可见[linear_and_embedding_module.py](hw3/linear_and_embedding_module.py)
+
+#### 3.4.3 嵌入模块（Embedding Module）
+如上所述，Transformer 的第一层是一个嵌入层（embedding layer），它将整数形式的 token ID 映射到维度为 d_model 的向量空间。我们将实现一个自定义的 Embedding 类，该类继承自 `torch.nn.Module`（因此你不应使用 nn.Embedding）。其 forward 方法应通过在一个形状为（vocab_size, d_model）的嵌入矩阵中，使用形状为（batch_size, sequence_length）的 torch.LongTensor 类型的 token ID 进行索引，来为每个 token ID 选择对应的嵌入向量。
+
+**问题（1分）实现嵌入模块**
+交付内容：实现一个名为 Embedding 的类，该类继承自 `torch.nn.Module`，并执行嵌入查找操作。你的实现应当遵循 PyTorch 内置的 nn.Embedding 模块的接口。我们推荐使用以下接口：
+
+`def __init__(self, num_embeddings, embedding_dim, device=None, dtype=None)`
+构造一个嵌入模块。该函数应接受以下参数：
+- num_embeddings: int，词汇表的大小
+- embedding_dim: int，嵌入向量的维度，即 d_model
+- device: torch.device | None = None，参数存储的设备
+- dtype: torch.dtype | None = None，参数的数据类型
+
+`def forward(self, token_ids: torch.Tensor) -> torch.Tensor`
+对给定的 token ID 查找对应的嵌入向量。
+注意事项：
+- 必须继承 nn.Module 类
+- 必须调用父类（超类）的构造函数
+- 将嵌入矩阵初始化为 nn.Parameter
+- 嵌入矩阵的形状应为 (num_embeddings, embedding_dim)，即 embedding_dim 是最后一个维度
+- 不能使用 `nn.Embedding` 或 `nn.functional.embedding`
+- 权重初始化请使用 `torch.nn.init.trunc_normal_`（截断正态分布初始化），并使用上述推荐的参数设置
+
+代码可见[linear_and_embedding_module.py](hw3/linear_and_embedding_module.py)
 
 
