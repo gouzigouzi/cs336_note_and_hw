@@ -606,4 +606,121 @@ tensor([-1.1294,  0.0739, -0.0756, -1.2595,  0.1013,  0.4984,  0.4841, -0.3894,
 
 代码可见[linear_and_embedding_module.py](hw3/linear_and_embedding_module.py)
 
+### 3.5 预归一化 Transformer 模块（Pre-Norm Transformer Block）
+![](../figures/fig3.png)
+每个 Transformer 模块包含两个子层：(1) 多头自注意力机制（Multi-Head Self-Attention）和 (2) 位置级前馈网络（Position-wise Feed-Forward Network）。我们采用**预归一化（pre-norm）结构**：在每个子层之前先进行层归一化。具体来说，若模块输入为$x$，则模块执行如下操作：
+1. **自注意力子层**:
+$$y = x + \mathrm{MultiHeadSelfAttention}\!\left(\mathrm{RMSNorm}(x)\right)$$
+2. **前馈网络子层**：
+$$z = y + \mathrm{FFN}\!\left(\mathrm{RMSNorm}(y)\right)$$
 
+每个残差连接后进入下一个子层。这种预归一化结构（配合 RMSNorm）在深层 Transformer 中有助于提升训练稳定性。
+![](../figures/fig4.png)
+
+#### 3.5.1 均方根归一化（Root Mean Square Layer Normalization）
+我们使用 **RMSNorm**。给定输入向量 $a \in \mathbb{R}^{d_{\mathrm{model}}}$，RMSNorm 将每个元素除以该向量的均方根，并乘以可学习的缩放因子：
+
+$$
+\mathrm{RMSNorm}(a_i) = \frac{a_i}{\mathrm{RMS}(a)} \cdot g_i,
+\qquad
+\text{其中}\quad
+\mathrm{RMS}(a) = \sqrt{\frac{1}{d_{\mathrm{model}}}\sum_{j=1}^{d_{\mathrm{model}}} a_j^2 + \epsilon }.
+$$
+
+其中 $g_i$ 是可学习的缩放参数（初始化为 1），$\epsilon$（例如 $1\mathrm{e}{-5}$）用于防止除零错误。  在实现时，应先将输入**提升为 float32 类型**再进行平方运算，以避免上溢，之后再降回原始数据类型。例如：
+```python
+# 前向传播中的示例框架    
+in_dtype = x.dtype    
+x = x.to(torch.float32)    
+# 执行 RMSNorm（省略具体计算）    
+# ...    
+result = ...    
+# 将结果转换回原始数据类型    
+return result.to(in_dtype)
+```
+
+**问题（1分）均方根归一化（RMSNorm）**
+交付内容：将 RMSNorm 实现为一个 torch.nn.Module。
+我们推荐使用以下接口：
+
+`def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None)`
+构造 RMSNorm 模块。该函数应接受以下参数：
+- d_model: int — 模型的隐藏层维度
+- eps: float = 1e-5 — 数值稳定用的 epsilon 值
+- device: torch.device | None = None — 参数存储的设备
+- dtype: torch.dtype | None = None — 参数的数据类型
+
+`def forward(self, x: torch.Tensor) -> torch.Tensor`
+处理一个形状为 (batch_size, sequence_length, d_model) 的输入张量，并返回相同形状的张量。
+注意：如上所述，在执行归一化之前，请记得先将输入提升（upcast）为 torch.float32 类型（之后再降回原始数据类型）。
+
+代码可见[RMSnorm.py](hw3/RMSnorm.py)
+
+#### 3.5.2 位置级前馈网络（Position-Wise Feed-Forward Network）
+在原始的Transformer论文（Vaswani等人[2017]，第3.3节）中，Transformer的前馈网络（Feed-Forward Network, FFN）由两个线性变换组成，中间使用ReLU激活函数（ReLU(x) = max(0, x)）。通常情况下，内部前馈层的维度是输入维度的4倍。
+
+然而，现代语言模型相较于这一原始设计引入了两个主要变化：使用了不同的激活函数，并采用了门控机制。具体来说，我们将实现一种名为“SwiGLU”的激活函数，该函数已被诸如Llama 3 [Grattafiori et al., 2024] 和 Qwen 2.5 [Yang et al., 2024] 等大语言模型（LLM）所采用。SwiGLU结合了SiLU（常被称为Swish）激活函数和一种称为门控线性单元（Gated Linear Unit, GLU）的门控机制。此外，我们还将省略线性层中有时使用的偏置项（bias），这是自PaLM [Chowdhery et al., 2022] 和 LLaMA [Touvron et al., 2023] 以来大多数现代大语言模型的做法。
+
+![](../figures/fig5.png)
+
+SiLU（或称Swish）激活函数 [Hendrycks 和 Gimpel, 2016; Elfwing 等, 2017] 定义如下：
+$$ \mathrm{SiLU}(x)=x\cdot\sigma(x)=\frac{x}{1+e^{-x}} $$
+如图所示，SiLU激活函数与ReLU激活函数类似，但在零点处是平滑的。
+
+门控线性单元（GLU）最初由Dauphin等人[2017]提出，其定义为一个经过Sigmoid函数变换的线性变换与另一个线性变换之间的逐元素乘积：
+$$ \mathrm{GLU}(x,W_1,W_2)=\sigma(W_1x)\odot W_2x, $$
+其中 $\odot$ 表示逐元素相乘。门控线性单元被认为可以通过提供一条线性的梯度通路，同时保留非线性能力，从而“减轻深层架构中的梯度消失问题”。
+
+将 SiLU/Swish 激活函数与 GLU 机制结合起来，就得到了 SwiGLU，我们将用它来构建前馈网络：
+$$ \mathrm{FFN}(x)=\mathrm{SwiGLU}(x,W_1,W_2,W_3) = W_2\big(\mathrm{SiLU}(W_1x)\odot W_3x\big) $$
+其中 $x\in\mathbb{R}^{d_{\text{model}}}$， $W_1,\;W_3\in\mathbb{R}^{d_{\text{ff}}\times d_{\text{model}}}, W_2\in\mathbb{R}^{d_{\text{model}}\times d_{\text{ff}}}$, 且通常设定 $d_{\text{ff}}=\frac{8}{3}\,d_{\text{model}}$
+
+Shazeer [2020] 首次提出了将SiLU/Swish激活函数与GLU结合的思路，并通过实验表明，在语言建模任务上，SwiGLU的表现优于ReLU以及无门控的SiLU等基线方法。在本作业的后续部分，你也将对SwiGLU和SiLU进行比较。尽管我们已经提到了这些组件的一些启发式理由（相关论文也提供了更多支持性证据），但保持实证视角仍然很重要。Shazeer论文中有一句如今广为流传的话：
+
+“我们并不解释为何这些架构似乎有效；我们将它们的成功归因于——如同其他一切一样——神的仁慈。”
+
+**问题（2分）实现位置级前馈网络**
+交付内容：实现 SwiGLU 前馈网络，该网络由 SiLU 激活函数和门控线性单元（GLU）机制组成。
+注意：在本题中，出于数值稳定性的考虑，你可以在实现中自由使用 torch.sigmoid。
+
+在实现时，应将前馈层的隐藏维度 $d_{\text{ff}}$ 设置为大约 $\frac{8}{3}\,d_{\text{model}}$ ，同时确保该维度是 64 的倍数，以便更好地利用硬件计算资源（如 GPU 的并行计算能力）。
+
+代码可见[SwiGLU.py](hw3/SwiGLU.py)
+
+#### 3.5.3 旋转位置编码（RoPE）
+如果可以对查询（Q）或键（K）向量使用合适的位置编码方式，那么注意力打分（点积）就能写成只依赖内容 $xx_m,xx_n$ 和相对位置 $m-n$ 的函数了，如下所示：
+$$
+\langle f_q(xx_m,m),\, f_k(xx_n,n)\rangle = g(xx_m,xx_n,\, m-n)
+$$
+
+为了编码位置信息，我们使用**旋转位置编码（Rotary Position Embedding, RoPE）**。对于每个位置 $i$ 和一个 $d$ 维向量 $q^{(i)}$，我们对每对维度 $(2k, 2k-1)$ 施加一个角度为 $\theta_{i,k}$ 的旋转。令 $k = 1,\ldots,d/2$，定义：
+$$
+\theta_{i,k} = i \cdot \frac{\Theta}{10000^{2k/d}}
+$$
+其中 $\Theta$ 为常数。在维度 $(2k,2k-1)$ 上的 $2 \times 2$ 旋转矩阵为：
+$$
+R_{i,k}=
+\begin{pmatrix}
+\cos(\theta_{i,k}) & -\sin(\theta_{i,k}) \\
+\sin(\theta_{i,k}) & \cos(\theta_{i,k})
+\end{pmatrix}
+$$
+所有这些 $2 \times 2$ 块构成一个完整的 $d \times d$ 分块对角旋转矩阵 $R_i$。我们将 $R_i$ 应用于查询（Q）或键（K）向量（不作用于值向量 V）。实践中，我们可以通过预先计算正弦/余弦表（注册为 buffer，而非参数）来实现 RoPE，表的大小为 $(max\_seq\_len,d)$。前向传播时，根据实际序列长度切片对应的 sin/cos 值并应用。相同的旋转在所有注意力头之间共享（将头维度视为旋转的批处理维度）。
+
+**问题（2 分）实现 RoPE**
+交付内容：实现一个名为 RotaryPositionalEmbedding 的类，将 RoPE（旋转位置编码）应用到输入张量上。
+推荐的接口如下：
+`def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None)`
+- 构造 RoPE 模块，并在需要时创建缓存（buffers）。
+- theta: RoPE 中的 $\Theta$ 值（控制旋转角度的频率基底）。
+- d_k: 查询（query）和键（key）向量的维度。
+- max_seq_len: 输入序列的最大长度。
+- device: 存储缓存张量的设备（torch.device 或 None）。
+
+`def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor`
+- 处理形状为 (..., seq_len, d_k) 的输入张量 x，返回相同形状的输出张量。
+- 应支持任意数量的批处理维度（batch dimensions）。
+- 假设 token_positions 是一个形状为 (..., seq_len) 的张量，表示 x 在序列维度上的各个 token 的位置索引。
+- 你应该使用 token_positions 来从预先计算好的 cos 和 sin 张量中沿序列维度进行索引（切片）。
+
+代码可见[rope.py](hw3/rope.py)
