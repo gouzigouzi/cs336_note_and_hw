@@ -31,21 +31,24 @@ class RoPE(nn.Module):
         positions = torch.arange(self.max_seq_len)
         # 计算正弦和余弦
         sinusoids = torch.outer(positions, freqs)  # outer是外积，即每个位置都与每个频率相乘 shape: [max_seq_len, d_k//2]
+        # 缓存 cos 和 sin 编码，不参与训练
         self.register_buffer("cos_cache", sinusoids.cos(), persistent=False)  # 利用register_buffer表示这是固定的，不需要学习
         self.register_buffer("sin_cache", sinusoids.sin(), persistent=False)
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
         # 这里的x是输入的稠密向量，token_positions是token的位置信息
+        # 从缓存中取出对应位置的 cos 和 sin: shape (*, seq_len, d_k//2)
         cos = self.cos_cache[token_positions]   # (..., seq_len, d_k//2)
         sin = self.sin_cache[token_positions]   # (..., seq_len, d_k//2)
 
-        # 这里还是分奇偶数写容易理解
+         # 分割输入为偶数和奇数维度
         x_part1 = x[..., 0::2]   # (..., seq_len, d_k//2)
         x_part2 = x[..., 1::2]   # (..., seq_len, d_k//2)
 
         output1 = x_part1 * cos - x_part2 * sin  # 偶数位置乘以cos，奇数位置乘以sin
         output2 = x_part1 * sin + x_part2 * cos  # 偶数位置乘以sin，奇数位置乘以cos
 
+        # 交错合并: 将 (even, odd) 沿最后一维堆叠并展平
         # out = torch.cat([output1, output2], dim=-1)  # shape: [batch, seq_len, d_k]
         out = torch.stack([output1, output2], dim=-1)  # [batch, seq_len, d_k//2, 2] #用stack能巧妙的把奇数和偶数交叉在一起，cat就不行
         out = out.flatten(-2)  # [batch, seq_len, d_k]

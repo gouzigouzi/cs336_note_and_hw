@@ -48,6 +48,7 @@ class TransformerBlock(nn.Module):
         self.causal_multi_head_attention = CausalMultiHeadAttentionWithRoPE(d_model,n_heads,max_seq_len,theta,device)
 
     def forward(self,in_features:torch.Tensor):
+        # in_features：(batch_size, seq_len, d_model)
         token_positions = torch.arange(in_features.shape[1],device=in_features.device)
         x1 = self.rms_norm1(in_features)
         x1 = self.causal_multi_head_attention(x1,self.attn_q_proj_weight,self.attn_k_proj_weight,self.attn_v_proj_weight,self.attn_o_proj_weight,token_positions)

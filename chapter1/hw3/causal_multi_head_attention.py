@@ -34,15 +34,22 @@ class CausalMultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
 
+        # # 创建投影层
+        # self.wq = nn.Linear(d_model, d_model, bias=False)
+        # self.wk = nn.Linear(d_model, d_model, bias=False)
+        # self.wv = nn.Linear(d_model, d_model, bias=False)
+        # self.wo = nn.Linear(d_model, d_model, bias=False)
+
     def attention(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor | None = None):
-        d_k = self.d_model
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k))
+        d_k = Q.shape[-1]
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k))  # (batch_size, n_heads, seq_len, seq_len)
         if mask is not None:
             print("scores.shape",scores.shape)
             print("mask.shape",mask.shape)
-            scores = scores.masked_fill(mask == 0, -1e9) #如果mask为0，则将对应位置的score设置为-1e9
+            scores = scores.masked_fill(mask, -1e9) #如果mask不为0，则将对应位置的score设置为-1e9
         attn_weights = torch.softmax(scores, dim=-1) #对key这一维度进行softmax归一化
         return torch.matmul(attn_weights, V) # 将attn_weights与value相乘得到最终的输出
+    
     def forward(self, x, wq, wk, wv, wo)->torch.Tensor:
         batch_size, seq_len, d_model = x.shape
 
@@ -50,22 +57,25 @@ class CausalMultiHeadAttention(nn.Module):
         k = x @ wk.T # (batch_size, seq_len, d_model) @ (d_model, d_k) -> (batch_size, seq_len, d_k)
         v = x @ wv.T # (batch_size, seq_len, d_model) @ (d_model, d_v) -> (batch_size, seq_len, d_v)
 
+        # q = self.wq(x) # (batch_size, seq_len, d_model) @ (d_model, d_k) -> (batch_size, seq_len, d_k)
+        # k = self.wk(x) # (batch_size, seq_len, d_model) @ (d_model, d_k) -> (batch_size, seq_len, d_k)
+        # v = self.wv(x) # (batch_size, seq_len, d_model) @ (d_model, d_v) -> (batch_size, seq_len, d_v)
+
         q = q.view(batch_size, seq_len, self.n_heads, self.head_dim) #view会优先切分最后一个维度，这和内存有关。
         k = k.view(batch_size, seq_len, self.n_heads, self.head_dim)
         v = v.view(batch_size, seq_len, self.n_heads, self.head_dim)
 
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = q.transpose(1, 2)  # (batch_size, n_heads, seq_len, head_dim)
+        k = k.transpose(1, 2)  # (batch_size, n_heads, seq_len, head_dim)
+        v = v.transpose(1, 2)  # (batch_size, n_heads, seq_len, head_dim)
 
-        #现在的形状是(batch_size, n_heads, seq_len, head_dim)
         # 创建mask，用于防止当前位置的token看到未来的token。
         mask = torch.triu(torch.ones(seq_len, seq_len,dtype=torch.bool,device=x.device), diagonal=1)
         mask = mask.unsqueeze(0).unsqueeze(0) # (1, 1, seq_len, seq_len)
-
 
         out = self.attention(q, k, v, mask)
         out = out.transpose(1, 2)
         out = out.contiguous().view(batch_size, seq_len, d_model)
         out = out @ wo.T
+        # out = self.wo(out)
         return out

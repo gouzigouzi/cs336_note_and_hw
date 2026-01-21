@@ -391,7 +391,7 @@ b'the' + b' c' + b'a' + b't' + b' at' + b'e'
 更具体地说，给定一个标记ID序列，Transformer 语言模型使用一个词元嵌入层（token embedding layer）生成一个向量序列。每个嵌入层接收一个形状为 (batch_size, sequence_length) 的整数张量，并输出一个形状为 (batch_size, sequence_length, d_model) 的向量序列。
 
 #### 3.1.2 预归一化 Transformer 块
-嵌入之后，激活值会经过多个结构相同的神经网络层进行处理。一个标准的 decoder-only Transformer 语言模型由 num_layers 个相同的层（通常称为 Transformer “块”）组成。
+嵌入之后，激活值会经过多个结构相同的神经网络层进行处理。一个标准的 **decoder-only** Transformer 语言模型由 num_layers 个相同的层（通常称为 Transformer “块”）组成。
 每个 Transformer 块接收一个形状为 (batch_size, sequence_length, d_model) 的输入，并输出一个相同形状的张量 (batch_size, sequence_length, d_model)。每个块通过自注意力机制在序列中聚合信息，并通过前馈网络层对其进行非线性变换。
 
 ### 3.2 输出归一化与嵌入
@@ -724,3 +724,236 @@ $$
 - 你应该使用 token_positions 来从预先计算好的 cos 和 sin 张量中沿序列维度进行索引（切片）。
 
 代码可见[rope.py](hw3/rope.py)
+
+#### 3.5.4 缩放点积注意力（Scaled Dot-Product Attention）
+将注意力（Attention）操作从数学上定义如下：
+$$
+\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V
+$$
+其中 $Q\in\mathbb{R}^{n\times d_k},K\in\mathbb{R}^{m\times d_k},V\in\mathbb{R}^{m\times d_v}$。这里的 $Q$、$K$ 和 $V$ 都是该操作的输入,注意，它们不是可学习的参数。
+
+**掩码（Masking）**：有时我们希望对注意力操作的输出进行掩码处理。掩码矩阵的形状为 $M\in\{\mathrm{True},\mathrm{False}\}^{n\times m}$，其每一行 $i$ 表示第 $i$ 个查询（query）应当关注哪些键（key）。通常（但稍显反直觉地），掩码中位置 $(i,j)$ 处的值为 True 表示查询 $i$ **可以关注**键 $j$，而 False 表示**不能关注**。换句话说，信息只在值为 True 的 $(i,j)$ 位置流动。例如，考虑一个 $1 \times 3$ 的掩码矩阵 $[[True,True,False]]$，则唯一的查询向量仅关注前两个键。
+
+从计算角度看，使用掩码比在子序列上单独计算注意力更高效。我们可以通过在 softmax 前的注意力分数矩阵 $\frac{QK^{\top}}{\sqrt{d_k}}$ 上，将掩码为 False 的位置加上 $-\infty$ 来实现这一效果（实际实现中通常用极小的负数如 -1e9 代替 $-\infty$）。这样，softmax 会将这些位置的权重置为接近零，从而屏蔽对应的信息流动。
+
+**问题（1 分）实现 softmax**
+交付内容：编写一个函数，对张量执行 softmax 操作。你的函数应接受两个参数：一个张量和一个维度 i，并在输入张量的第 i 维上应用 softmax。输出张量应与输入张量具有相同的形状，但其第 i 维将变为归一化的概率分布。
+
+为了防止数值不稳定问题，你需要使用“减去最大值”的技巧：在对第 i 维进行指数运算前，先从该维的每个元素中减去该维的最大值。
+
+代码可见[softmax.py](hw3/softmax.py)
+
+**问题（5 分）实现缩放点积注意力**
+交付内容：实现缩放点积注意力函数。你的实现应支持形状为 (batch_size, ..., seq_len, d_k) 的查询（Q）和键（K），以及形状为 (batch_size, ..., seq_len, d_v) 的值（V），其中 ... 表示任意数量的批处理类维度（如果存在）。函数应返回形状为 (batch_size, ..., d_v) 的输出。关于批处理类维度的讨论，详见第 3.3 节。
+
+你的实现还应支持一个可选的、用户提供的布尔类型掩码（mask），其形状为 (seq_len, seq_len)。对于掩码值为 True 的位置，其对应的注意力概率应正常计算并归一化（总和为 1）；而对于掩码值为 False 的位置，其注意力概率应为 0（即被屏蔽）。
+
+![](../figures/fig6.png)
+
+代码可见[scaled_dot_product_attention.py](hw3/scaled_dot_product_attention.py)
+
+#### 3.5.5 因果多头自注意力（Causal Multi-Head Self-Attention）
+我们将实现如 Vaswani 等人 [2017] 论文第 3.2.2 节所述的**多头自注意力机制**。回顾一下，从数学上讲，多头注意力的操作定义如下：
+$$
+\mathrm{MultiHead}(Q,K,V)=\mathrm{Concat}(\mathrm{head}_1,\ldots,\mathrm{head}_h)
+$$
+其中
+$$
+\mathrm{head}_i=\mathrm{Attention}(Q_i,K_i,V_i)
+$$
+这里的 $Q_i,K_i,V_i$ 分别是查询 $Q$、键 $K$ 和值 $V$ 在嵌入维度上的第 $i \in \{1,\dots,h\}$ 个切片，每个切片大小为 $d_k$ 或 $d_v$。其中 $\mathrm{Attention}$ 是 §3.5.4 中定义的**缩放点积注意力**操作。
+
+由此可得**多头自注意力**的表达式：
+$$
+\mathrm{MultiHeadSelfAttention}(x)=W_O\cdot \mathrm{MultiHead}(W_Qx,\;W_Kx,\;W_Vx)
+$$
+其中可学习参数为：
+- $W_Q\in\mathbb{R}^{h d_k\times d_{\text{model}}}$
+- $W_K\in\mathbb{R}^{h d_k\times d_{\text{model}}}$
+- $W_V\in\mathbb{R}^{h d_v\times d_{\text{model}}}$
+- $W_O\in\mathbb{R}^{d_{\text{model}}\times h d_v}$ 
+
+由于在多头注意力中 $Q,K,V$ 会被沿输出维度切分为 $h$ 个头，我们可以将 $W_Q,W_K,W_V$ 理解为每个注意力头各自对应的投影矩阵。当实现正确时，你应该仅通过**三次矩阵乘法**就完成所有查询、键和值的投影。
+
+**因果掩码（Causal Masking）**
+你的实现应防止模型关注序列中的未来 token。换句话说，如果输入序列为 $t_1,\ldots,t_n$，而我们正在计算前缀 $t_1,\ldots,t_i$（其中 $i<n$ ）的下一个词预测时，模型不应能访问位置 $t_{i+1},\ldots,t_n$ 的表示。因为在推理生成文本时，模型无法提前看到未来的 token；若允许访问，会泄露真实下一个词的信息，从而让语言建模任务变得平凡。
+
+最朴素的方法是对序列的每一个前缀单独运行一次注意力（共 $n$ 次），但我们采用**因果注意力掩码**来高效解决这个问题：它允许位置 $i$ 只关注所有满足 $j \leq i$ 的位置 $j$。你可以使用 torch.triu 或广播的索引比较来构造这样的上三角掩码（上三角部分为 False），并利用你在 §3.5.4 中实现的缩放点积注意力已支持掩码这一特性。
+
+**应用 RoPE（旋转位置编码）**
+RoPE 应**仅应用于查询（Q）和键（K）向量，不应用于值（V）向量**。此外，在处理多头结构时，**头维度应被视为批处理维度**，因为每个注意力头是独立计算注意力的。这意味着相同的 RoPE 旋转操作应分别应用于每个头的查询和键向量——即对每个头独立地应用相同的位置旋转方式（共享旋转频率，但按头独立作用于其对应的 Q 和 K）。
+
+**问题（5 分）实现因果多头自注意力**
+交付内容：将因果多头自注意力实现为一个 torch.nn.Module 模块。你的实现应至少接受以下参数：
+- d_model: int，Transformer 模块输入的特征维度。
+- num_heads: int，多头自注意力中使用的注意力头数量。
+
+按照 Vaswani 等人 [2017] 的设定，令每个头的键 $d_k$ 和值 $d_v$ 的维度为：
+$$
+d_k = d_v = \frac{d_{model}}{h}
+$$
+你的实现应满足：
+- 使用因果掩码（causal mask），防止每个位置关注未来 token；
+- 支持批量输入和任意序列长度；
+- 在查询（Q）和键（K）上应用 RoPE 位置编码（不应用于值 V）；
+- 通过线性投影生成 Q、K、V，并正确分割为多个头；
+- 最终输出经过输出投影，保持输出维度为 d_model。
+
+不带 RoPE 位置编码的代码可见[causal_multi_head_attention.py](hw3/causal_multi_head_attention.py)，带 RoPE 位置编码的代码可见[causal_multi_head_attention_with_rope.py](hw3/causal_multi_head_attention_with_rope.py)
+
+### 3.6 完整的 Transformer 语言模型
+让我们开始构建 Transformer 块。一个 Transformer 块包含两个“子层”，一个用于多头自注意力（Multi-Head Self-Attention），另一个用于前馈网络（Feed-Forward Network）。在每个子层中，我们首先进行 RMSNorm 归一化，然后执行主要操作（MHA 或 FF），最后将结果通过残差连接加到原始输入上。
+
+具体来说，Transformer 块的前半部分（即第一个“子层”）应实现以下更新过程，将输入 x 转换为输出 y：
+$$
+y=x+\mathrm{MultiHeadSelfAttention}(\mathrm{RMSNorm}(x))
+$$
+
+**问题（3分）实现Transformer块**
+请按照第3.5节的描述，实现预归一化（pre-norm）的 Transformer 块。你的 Transformer 块至少应支持以下参数：
+- d_model: int，Transformer块输入的特征维度。
+- num_heads: int，多头自注意力机制中使用的注意力头数量。
+- d_ff: int，位置前馈网络（feed-forward）中间层的维度。
+
+代码可见[transformer_block.py](hw3/transformer_block.py)
+
+现在我们将各个模块组合起来，遵循图1中的高层结构示意图。根据第3.1.1节中对嵌入（embedding）的描述，先生成输入嵌入，然后将其依次输入到 num_layers 个Transformer块中，最后将输出传入输出层，从而得到词汇表上的概率分布。
+
+**问题（3分）实现Transformer语言模型**
+现在是时候将所有部分整合起来了！请根据第3.1节的描述并参考图1的结构，实现 Transformer 语言模型。你的实现至少应包含之前提到的所有Transformer块的构造参数，以及以下额外参数：
+- vocab_size: int，词汇表的大小，用于确定词元（token）嵌入矩阵的维度。
+- context_length: int，最大上下文长度，用于确定位置嵌入矩阵的维度。
+- num_layers: int，使用的Transformer块的数量。
+
+交付内容：一个能够通过上述测试的 TransformerLM 模块。
+
+代码可见[run_transformer_lm.py](hw3/run_transformer_lm.py)
+
+**资源核算（Resource Accounting）**：
+了解Transformer各个部分在计算和内存上的消耗是非常有用的。接下来，我们将逐步进行一些基本的“FLOPs 核算”（即计算量统计）。Transformer 中绝大多数的浮点运算（FLOPs）来自矩阵乘法，因此我们的核心方法很简单：
+1. 列出 Transformer 前向传播（forward pass）中所有的矩阵乘法操作。
+2. 将每个矩阵乘法转换为所需的 FLOPs（浮点运算次数）。
+
+对于第二步，以下规则非常有用：
+
+**规则**：给定矩阵 $A\in\mathbb{R}^{m \times n}$ 和 $B\in\mathbb{R}^{n \times p}$，矩阵乘积 $AB$ 需要 $2mnp$ 次FLOPs。
+
+**解释**：
+因为乘积结果中的每个元素$(AB)[i,j]=A[i,:] \cdot B[:,j]$是一个向量点积，该点积包含 $n$ 次乘法和 $n$ 次加法，共 $2n$ 次FLOPs。而 $AB$ 一共有 $m \times p$ 个元素，因此总计算量为 $(2n) \times (m\times p) = 2mnp \mathrm{FLOPS}$
+
+在你进行下一个问题之前，建议先仔细检查你实现的 Transformer 块和 Transformer 语言模型的每个组件，列出其中所有的矩阵乘法操作，并计算它们各自对应的 FLOPs 开销。这将帮助你更准确地分析模型的计算复杂度。
+
+**问题（5分）TransformerLM 资源核算**
+(a) 考虑 GPT-2 XL 模型，其配置如下：
+- vocab_size: 50,257
+- context_length: 1,024
+- num_layers: 48
+- d_model: 1,600
+- num_heads: 25
+- d_ff: 6,400
+
+假设我们使用该配置构建模型，该模型共有多少可训练参数？若每个参数以单精度浮点数（32位）存储，仅加载该模型需要多少内存？
+交付内容：一到两句话的简要回答。
+
+回答：
+Embedding 参数计算
+- token embedding：vocab_size $\times$ d_model = 50,257 $\times$ 1600 = 80,411,200
+- positional embedding：context_length $\times$ d_model = 1,024 $\times$ 1600 = 1,638,400
+
+合计：82,049,600
+每个 Transformer Block（每层）
+- Self-Attention：
+  - QKV 投影：权重 $d \times 3d=3d^2$, bias $3d$
+  - 输出投影：权重 $d \times d=d^2$, bias $d$
+  合计：权重 $4d^2$, bias $4d$
+- MLP：
+  - $d \rightarrow d_{ff}$：权重 $d \cdot d_{ff}$， bias $d_{ff}$
+  - $d_{ff} \rightarrow d$：权重 $d_{ff} \cdot d$， bias $d$
+  合计：权重 $2d_{ff} \cdot d$, bias $d_{ff}+d$
+- 2 个 LayerNorm：每个有 weight+bias 共 $2d$，两个共 $4d$
+
+因此每层参数：
+$$
+4d^2 + 2d \cdot d_{ff} + (4d + 4d + d_{ff}+d) = 4d^2 + 2d \cdot d_{ff} + (9d + d_{ff})
+$$
+代入 $d=1600,d_{ff}=6400$：每层参数量为30,740,800。48层共1,475,558,400。最后 LayerNorm 参数量为 $2d=3200$。
+总参数量为1,557,611,200。
+
+每个参数 32bit = 4 bytes：
+$$
+1,557,611,200 \times 4=6,230,444,800 bytes
+$$
+约为6.23GB。
+
+---
+
+(b) 列出完成一次 GPT-2 XL 规模模型前向传播所需的所有矩阵乘法操作。这些矩阵乘法总共需要多少次 FLOPs？假设输入序列长度为 context_length 个 token。
+交付内容：一份带说明的矩阵乘法列表，以及所需的总 FLOPs 数量。
+
+**单层（1 个 Transformer block）的矩阵乘法清单与 FLOPs**
+
+| 模块              | 矩阵乘法（形状）                                |  次数 | FLOPs 公式                             |       数值 FLOPs |
+| --------------- | --------------------------------------- | --: | ------------------------------------ | -------------: |
+| QKV 投影          | $(T\times d)\cdot(d\times 3d)$     |   1 | $2T d (3d)=6Td^2$     | 15,728,640,000 |
+| 注意力打分 $QK^\top$ | 每头：$(T\times d_h)\cdot(d_h\times T)$    | $h$ | $h\cdot 2T d_h T = 2T^2(hd_h)=2T^2d$ |  3,355,443,200 |
+| 注意力加权 $PV$     | 每头：$(T\times T)\cdot(T\times d_h)$     | $h$ | $h\cdot 2T T d_h=2T^2d$              |  3,355,443,200 |
+| 输出投影 $WO$       | $(T\times d)\cdot(d\times d)$           |   1 | $2Td^2$                             |  5,242,880,000 |
+| FFN 上投影         | $(T\times d)\cdot(d\times d_{ff})$      |   1 | $2Tdd_{ff}$                         | 20,971,520,000 |
+| FFN 下投影         | $(T\times d_{ff})\cdot(d_{ff}\times d)$ |   1 | $2T d_{ff} d$                        | 20,971,520,000 |
+
+**单层合计：**
+$6Td^2 + 4T^2d + 4Tdd_{ff}$
+数值：**69,625,446,400 FLOPs**（约 6.96e10）
+
+**48 层总 FLOPs（只算 block 内矩阵乘法）**
+
+把上面单层乘以 (L=48)：
+
+* QKV：$15.72864\text{B}\times 48 = 754.97472\text{B}$
+* $QK^\top$：$3.3554432\text{B}\times 48 = 161.0612736\text{B}$
+* $PV$：同上 $=161.0612736\text{B}$
+* 输出投影：$5.24288\text{B}\times 48 = 251.65824\text{B}$
+* FFN 上：$20.97152\text{B}\times 48 = 1,006.63296\text{B}$
+* FFN 下：同上 $=1,006.63296\text{B}$
+
+**48 层 block 内矩阵乘法总计：**
+$3,342,021,427,200\ \text{FLOPs}\ \approx 3.342\times 10^{12}$
+
+**最终词表 logits 投影（LM head）**
+（权重是否与 embedding 共享不影响 FLOPs，只要要算 logits 就要做这次乘法）
+$(T\times d)\cdot(d\times V)\Rightarrow 2T d V$
+数值：$2\cdot 1024\cdot 1600\cdot 50257 = 164,682,137,600\ \text{FLOPs}$
+
+**一次完整前向传播（矩阵乘法部分）总 FLOPs**
+$\text{Total} = (48\ \text{层 block}) + (\text{LM head})$
+$= 3,342,021,427,200 + 164,682,137,600 = 3,506,703,564,800\ \text{FLOPs}$
+
+**最终答案：约 (3.51\times 10^{12}) FLOPs（≈ 3.51 TFLOPs）**（batch=1、只计矩阵乘法）。
+
+---
+
+(c) 根据上述分析，模型的哪些部分消耗的 FLOPs 最多？
+交付内容：一到两句话的简要回答。
+
+结论：GPT-2 XL 这种结构里，FLOPs 最大头几乎都在 FFN（MLP）上，约占 60% 左右；注意力相关（含 QKV、WO、QK、PV）合起来约 40%。
+
+---
+
+(d) 使用以下模型配置重复上述分析：
+- GPT-2 small：12 层，d_model = 768，12 个注意力头
+- GPT-2 medium：24 层，d_model = 1024，16 个注意力头
+- GPT-2 large：36 层，d_model = 1280，20 个注意力头
+  
+随着模型规模增大，TransformerLM 的各个部分在总 FLOPs 中所占比例是上升还是下降？
+交付内容：对每个模型，提供各组件的 FLOPs 分解（占前向传播总 FLOPs 的比例），并用一到两句话描述模型规模变化如何影响各组件的 FLOPs 占比。
+
+回答：
+越大的 GPT-2，计算越来越被“$d^2$项”（尤其 FFN）主导；而只线性随 (d) 增长的部分（注意力的 $T^2d$ 和 logits 的 $TdV$）相对变“更便宜”。
+
+---
+
+(e) 将 GPT-2 XL 的上下文长度增加到 16,384。一次前向传播的总 FLOPs 如何变化？各模型组件的 FLOPs 相对贡献有何变化？
+交付内容：一到两句话的简要回答。
+
+回答：
+把 GPT-2 XL 的 $T$ 从 1,024 提到 16,384（×16）后，一次前向的矩阵乘法 FLOPs 从约 $3.51\times10^{12}$ 增到约 $1.33\times10^{14}$，约 **×38**（因为注意力里的 $QK^\top$ 与 $PV$ 是 $O(T^2)$）。相对贡献会从原先 **FFN+投影占大头** 转为 **注意力的 $QK^\top/PV$ 占主导**：它从约 **9%** 跃升到约 **62%**，而 FFN 从约 **57%** 降到约 **24%**（LM head 约 **4.7%→2%**）。
