@@ -18,6 +18,7 @@ def top_p_sampling(probabilities, top_p=0.9):
     # 随机选择一个概率大于0的token
     next_token_idx = torch.multinomial(sort_probabilities,1)
     next_token_idx = torch.gather(idx,dim=-1,index=next_token_idx)
+    
     # 返回下一个token
     return next_token_idx
 

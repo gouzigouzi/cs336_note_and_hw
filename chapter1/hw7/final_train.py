@@ -50,7 +50,7 @@ run = wandb.init(project="cs336_final_train",
                 "d_ff": 1344,
                 "n_layers": 4,
                 "n_heads": 16,
-                "rope_theta": 10000.0,
+                "rope_theta": 10000.0,  # RoPE的基频/尺度参数
 
                 # Training
                 "batch_size": batch_size, # Adjust based on your GPU memory
@@ -90,29 +90,31 @@ config = run.config
 device = torch.device(device if torch.cuda.is_available() else "cpu")
 data_path = config["train_data_path"]
 vocab_size = config["vocab_size"]
-# # 训练BPE分词器
+
+# # # 训练BPE分词器
 # special_tokens = ["<|endoftext|>"]
 # vocab, merges = run_train_bpe(data_path, vocab_size, special_tokens)
 # print("已经训练好BPE分词器")
 
-# 从 vocab.pkl 加载词汇表
+# # 从 vocab.pkl 加载词汇表
 # with open("vocab.pkl", "rb") as f:
 #     # pickle.load 会自动恢复字典，并且值是 bytes 类型
 #     vocab = pickle.load(f)
 
-# 从 merges.pkl 加载合并规则
+# # 从 merges.pkl 加载合并规则
 # with open("merges.pkl", "rb") as f:
 #     # pickle.load 会自动恢复列表，并且元组里的元素是 bytes 类型
 #     merges = pickle.load(f)
 # special_tokens = ["<|endoftext|>"]  
 
 # tokenizer = Tokenizer(vocab, merges, special_tokens)
-# 加载训练数据
+# # 加载训练数据
 # with open(data_path, "r",encoding="utf-8") as f:
 #     original_data = f.read()
 # encode_ids = tokenizer.encode(original_data)
 # encode_ids = torch.tensor(encode_ids, dtype=torch.long)
 # print("数据加载完成")
+
 #直接导入编码后的数据
 with open("encoded_ids_train.pkl", "rb") as f:
     train_encode_ids = pickle.load(f)
@@ -121,18 +123,22 @@ with open("encoded_ids_valid.pkl", "rb") as f:
 
 train_data_loader = DataLoader(train_encode_ids, config["batch_size"],config["context_length"],shuffle=True) # 训练集导入
 valid_data_loader = DataLoader(valid_encode_ids, config["batch_size"],config["context_length"],shuffle=True) # 验证集导入
+
 # 加载模型
 if args.use_rmsnorm:
     model = TransformerModuleWithoutRMSNorm(config["d_model"], config["n_heads"], config["d_ff"], config["context_length"], config["rope_theta"], config["n_layers"], vocab_size, device).to(device)
 else:
     model = TransformerModule(config["d_model"], config["n_heads"], config["d_ff"], config["context_length"], config["rope_theta"], config["n_layers"], vocab_size, device).to(device)
 # 这一行是错误的，因为 args 对象里没有 no_rmsnorm 这个属性
+
 # 加载优化器
 lr_scheduler = CosineSchedule(config["max_learning_rate"], config["min_learning_rate"], config["lr_warmup_steps"], config["cosine_cycle_iters"]) # 学习率退火   
 optimizer = AdamW(model.parameters(), config["initial_lr"], (config["adam_beta1"], config["adam_beta2"]), config["eps"], config["weight_decay"])
+
 # 加载损失函数
 loss_fn = CrossEntropyLoss()
 print("模型加载完成")
+
 # 4. 训练循环
 model.train()
 global_step = 0  # 初始化全局步数

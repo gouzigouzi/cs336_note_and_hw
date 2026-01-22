@@ -400,7 +400,9 @@ b'the' + b' c' + b'a' + b't' + b' at' + b'e'
 我们将实现“预归一化”（pre-norm）Transformer块（详见第3.5节），这种结构额外要求在最后一个Transformer块之后使用层归一化（Layer Normalization，详见下文），以确保输出具有适当的尺度。
 
 在此归一化之后，我们将使用一个标准的可学习线性变换，将 Transformer 块的输出转换为预测的下一个标记的 logits，参见例如 Radford 等 [2018] 的公式2，如下所示:
-$$\mathrm{FFN}(x) = \max(0, xW_1 + b_1)\,W_2 + b_2.$$
+$$
+\mathrm{FFN}(x) = \max(0, xW_1 + b_1)\,W_2 + b_2.
+$$
 
 ### 3.3 备注：批处理、Einsum 与高效计算
 在整个 Transformer 模型中，我们会对许多类似批次的输入执行相同的计算。以下是一些例子：
@@ -529,7 +531,9 @@ dimmed_images_v2.shape: torch.Size([64, 10, 128, 128, 3])
 
 #### 3.4.2 线性模块（Linear Module）
 线性模块执行矩阵乘法操作。我们实现一个自定义的 Linear 类（继承自 `torch.nn.Module`），不包含偏置项。其前向传播计算为：
-$$y=Wx,$$
+$$
+y=Wx,
+$$
 
 ```python
 import torch
@@ -610,9 +614,13 @@ tensor([-1.1294,  0.0739, -0.0756, -1.2595,  0.1013,  0.4984,  0.4841, -0.3894,
 ![](../figures/fig3.png)
 每个 Transformer 模块包含两个子层：(1) 多头自注意力机制（Multi-Head Self-Attention）和 (2) 位置级前馈网络（Position-wise Feed-Forward Network）。我们采用**预归一化（pre-norm）结构**：在每个子层之前先进行层归一化。具体来说，若模块输入为$x$，则模块执行如下操作：
 1. **自注意力子层**:
-$$y = x + \mathrm{MultiHeadSelfAttention}\!\left(\mathrm{RMSNorm}(x)\right)$$
+$$
+y = x + \mathrm{MultiHeadSelfAttention}\!\left(\mathrm{RMSNorm}(x)\right)
+$$
 2. **前馈网络子层**：
-$$z = y + \mathrm{FFN}\!\left(\mathrm{RMSNorm}(y)\right)$$
+$$
+z = y + \mathrm{FFN}\!\left(\mathrm{RMSNorm}(y)\right)
+$$
 
 每个残差连接后进入下一个子层。这种预归一化结构（配合 RMSNorm）在深层 Transformer 中有助于提升训练稳定性。
 ![](../figures/fig4.png)
@@ -664,15 +672,24 @@ return result.to(in_dtype)
 ![](../figures/fig5.png)
 
 SiLU（或称Swish）激活函数 [Hendrycks 和 Gimpel, 2016; Elfwing 等, 2017] 定义如下：
-$$ \mathrm{SiLU}(x)=x\cdot\sigma(x)=\frac{x}{1+e^{-x}} $$
+$$
+\mathrm{SiLU}(x)=x\cdot\sigma(x)=\frac{x}{1+e^{-x}}
+$$
+
 如图所示，SiLU激活函数与ReLU激活函数类似，但在零点处是平滑的。
 
 门控线性单元（GLU）最初由Dauphin等人[2017]提出，其定义为一个经过Sigmoid函数变换的线性变换与另一个线性变换之间的逐元素乘积：
-$$ \mathrm{GLU}(x,W_1,W_2)=\sigma(W_1x)\odot W_2x, $$
+$$
+\mathrm{GLU}(x,W_1,W_2)=\sigma(W_1x)\odot W_2x, 
+$$
+
 其中 $\odot$ 表示逐元素相乘。门控线性单元被认为可以通过提供一条线性的梯度通路，同时保留非线性能力，从而“减轻深层架构中的梯度消失问题”。
 
 将 SiLU/Swish 激活函数与 GLU 机制结合起来，就得到了 SwiGLU，我们将用它来构建前馈网络：
-$$ \mathrm{FFN}(x)=\mathrm{SwiGLU}(x,W_1,W_2,W_3) = W_2\big(\mathrm{SiLU}(W_1x)\odot W_3x\big) $$
+$$
+\mathrm{FFN}(x)=\mathrm{SwiGLU}(x,W_1,W_2,W_3) = W_2\big(\mathrm{SiLU}(W_1x)\odot W_3x\big)
+$$
+
 其中 $x\in\mathbb{R}^{d_{\text{model}}}$， $W_1,\;W_3\in\mathbb{R}^{d_{\text{ff}}\times d_{\text{model}}}, W_2\in\mathbb{R}^{d_{\text{model}}\times d_{\text{ff}}}$, 且通常设定 $d_{\text{ff}}=\frac{8}{3}\,d_{\text{model}}$
 
 Shazeer [2020] 首次提出了将SiLU/Swish激活函数与GLU结合的思路，并通过实验表明，在语言建模任务上，SwiGLU的表现优于ReLU以及无门控的SiLU等基线方法。在本作业的后续部分，你也将对SwiGLU和SiLU进行比较。尽管我们已经提到了这些组件的一些启发式理由（相关论文也提供了更多支持性证据），但保持实证视角仍然很重要。Shazeer论文中有一句如今广为流传的话：
@@ -697,6 +714,7 @@ $$
 $$
 \theta_{i,k} = i \cdot \frac{\Theta}{10000^{2k/d}}
 $$
+
 其中 $\Theta$ 为常数。在维度 $(2k,2k-1)$ 上的 $2 \times 2$ 旋转矩阵为：
 $$
 R_{i,k}=
@@ -705,6 +723,7 @@ R_{i,k}=
 \sin(\theta_{i,k}) & \cos(\theta_{i,k})
 \end{pmatrix}
 $$
+
 所有这些 $2 \times 2$ 块构成一个完整的 $d \times d$ 分块对角旋转矩阵 $R_i$。我们将 $R_i$ 应用于查询（Q）或键（K）向量（不作用于值向量 V）。实践中，我们可以通过预先计算正弦/余弦表（注册为 buffer，而非参数）来实现 RoPE，表的大小为 $(max\_seq\_len,d)$。前向传播时，根据实际序列长度切片对应的 sin/cos 值并应用。相同的旋转在所有注意力头之间共享（将头维度视为旋转的批处理维度）。
 
 **问题（2 分）实现 RoPE**
@@ -730,6 +749,7 @@ $$
 $$
 \mathrm{Attention}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V
 $$
+
 其中 $Q\in\mathbb{R}^{n\times d_k},K\in\mathbb{R}^{m\times d_k},V\in\mathbb{R}^{m\times d_v}$。这里的 $Q$、$K$ 和 $V$ 都是该操作的输入,注意，它们不是可学习的参数。
 
 **掩码（Masking）**：有时我们希望对注意力操作的输出进行掩码处理。掩码矩阵的形状为 $M\in\{\mathrm{True},\mathrm{False}\}^{n\times m}$，其每一行 $i$ 表示第 $i$ 个查询（query）应当关注哪些键（key）。通常（但稍显反直觉地），掩码中位置 $(i,j)$ 处的值为 True 表示查询 $i$ **可以关注**键 $j$，而 False 表示**不能关注**。换句话说，信息只在值为 True 的 $(i,j)$ 位置流动。例如，考虑一个 $1 \times 3$ 的掩码矩阵 $[[True,True,False]]$，则唯一的查询向量仅关注前两个键。
@@ -757,16 +777,19 @@ $$
 $$
 \mathrm{MultiHead}(Q,K,V)=\mathrm{Concat}(\mathrm{head}_1,\ldots,\mathrm{head}_h)
 $$
+
 其中
 $$
 \mathrm{head}_i=\mathrm{Attention}(Q_i,K_i,V_i)
 $$
+
 这里的 $Q_i,K_i,V_i$ 分别是查询 $Q$、键 $K$ 和值 $V$ 在嵌入维度上的第 $i \in \{1,\dots,h\}$ 个切片，每个切片大小为 $d_k$ 或 $d_v$。其中 $\mathrm{Attention}$ 是 §3.5.4 中定义的**缩放点积注意力**操作。
 
 由此可得**多头自注意力**的表达式：
 $$
 \mathrm{MultiHeadSelfAttention}(x)=W_O\cdot \mathrm{MultiHead}(W_Qx,\;W_Kx,\;W_Vx)
 $$
+
 其中可学习参数为：
 - $W_Q\in\mathbb{R}^{h d_k\times d_{\text{model}}}$
 - $W_K\in\mathbb{R}^{h d_k\times d_{\text{model}}}$
@@ -792,6 +815,7 @@ RoPE 应**仅应用于查询（Q）和键（K）向量，不应用于值（V）�
 $$
 d_k = d_v = \frac{d_{model}}{h}
 $$
+
 你的实现应满足：
 - 使用因果掩码（causal mask），防止每个位置关注未来 token；
 - 支持批量输入和任意序列长度；
@@ -876,6 +900,7 @@ Embedding 参数计算
 $$
 4d^2 + 2d \cdot d_{ff} + (4d + 4d + d_{ff}+d) = 4d^2 + 2d \cdot d_{ff} + (9d + d_{ff})
 $$
+
 代入 $d=1600,d_{ff}=6400$：每层参数量为30,740,800。48层共1,475,558,400。最后 LayerNorm 参数量为 $2d=3200$。
 总参数量为1,557,611,200。
 
@@ -883,6 +908,7 @@ $$
 $$
 1,557,611,200 \times 4=6,230,444,800 bytes
 $$
+
 约为6.23GB。
 
 ---
@@ -957,3 +983,452 @@ $= 3,342,021,427,200 + 164,682,137,600 = 3,506,703,564,800\ \text{FLOPs}$
 
 回答：
 把 GPT-2 XL 的 $T$ 从 1,024 提到 16,384（×16）后，一次前向的矩阵乘法 FLOPs 从约 $3.51\times10^{12}$ 增到约 $1.33\times10^{14}$，约 **×38**（因为注意力里的 $QK^\top$ 与 $PV$ 是 $O(T^2)$）。相对贡献会从原先 **FFN+投影占大头** 转为 **注意力的 $QK^\top/PV$ 占主导**：它从约 **9%** 跃升到约 **62%**，而 FFN 从约 **57%** 降到约 **24%**（LM head 约 **4.7%→2%**）。
+
+
+## 4 训练Transformer LM
+我们现在已经有了通过分词器预处理数据和模型（Transformer）的步骤。接下来需要完成支持训练的所有代码，主要包括以下部分：
+- 损失函数：需要定义损失函数（交叉熵）。
+- 优化器：需要定义用于最小化该损失的优化器（AdamW）。
+- 训练循环：需要构建所有支持性的基础设施，包括加载数据、保存检查点以及管理训练过程。
+
+### 4.1 交叉熵损失
+回顾一下，Transformer 语言模型为每个长度为 $m+1$ 的序列 $x$ 和每个位置 $i=1, \ldots, m$ 定义了一个分布 $p_{\theta}\!\left(x_{i+1}\mid x_{1:i}\right)$，意思是看见前 $i$ 个 token 去预测第 $i+1$ 个 token 是什么。给定一个由长度为 $m$ 的序列组成的训练集 $D$，我们定义标准的交叉熵（负对数似然）损失函数：
+$$
+\ell(\theta; D)
+= \frac{1}{|D|\,m}
+\sum_{x\in D}\sum_{i=1}^{m}
+-\log p_{\theta}\!\left(x_{i+1}\mid x_{1:i}\right).
+$$
+
+其中 $\sum_{i=1}^{m}$ 表示一条序列里，每个位置都要预测一次下一个词（总共 $m$ 次）。$-\log p_{\theta}(\cdot)$ 表示如果模型给“正确答案 token”的概率越大，$−log$ 就越小，损失也就越小。 $\frac{1}{|D|\,m}$ 表示对数据条数和序列位置数做平均。注意：Transformer 的一次前向传播可以得到所有 $i=1, \ldots, m$ 对应的 $p_{\theta}\!\left(x_{i+1}\mid x_{1:i}\right)$。 
+
+具体而言，Transformer 为每个位置 $i$ 计算 logits 向量 $o_i \in \mathbb{R}^{\text{vocab\_size}}$，从而得到：
+$$
+p\!\left(x_{i+1}\mid x_{1:i}\right)
+= \mathrm{softmax}(o_i)[x_{i+1}]
+= \frac{\exp\!\big(o_i[x_{i+1}]\big)}
+{\sum_{a=1}^{\text{vocab\_size}} \exp\!\big(o_i[a]\big)}.
+$$
+
+可以把 $o_i[a]$ 理解为“位置 $i$ 预测下一个 token 是词表里第 $a$ 个 token 的打分”（未归一化）。交叉熵损失通常定义为关于 logits 向量 $o_i \in \mathbb{R}^{\text{vocab\_size}}$ 和目标值 $x_{i+1}$。
+
+实现交叉熵损失时需要特别注意数值稳定性问题，这一点与 softmax 的实现类似。
+
+**问题（cross_entropy）：实现交叉熵损失**
+交付内容：编写一个函数来计算交叉熵损失，该函数接收预测的 logits $o_i$和目标值 $x_{i+1}$，并计算交叉熵 $\ell_i = −log(softmax(o_i)[x_{i+1}])$。你的函数应满足以下要求：
+- 减去最大值以保证数值稳定性。
+- 尽可能约去 log 和 exp 运算，避免数值溢出或下溢。
+- 能够处理任意的批量（batch）维度，并对 batch 维度求平均后返回结果。
+
+与第 3.3 节一样，我们假设批量相关的维度始终位于词汇表维度（vocab_size）之前。
+
+代码可见[cross_entropy.py](hw4/cross_entropy.py)
+
+**困惑度（Perplexity）**
+交叉熵足以用于训练，但在评估模型时，我们还希望报告困惑度，主要是用来评价语言模型“预测下一个词有多难/有多不确定”的指标。对于一个长度为 $m$ 的序列，若其对应的交叉熵损失分别为 $\ell_1,\ldots,\ell_m$：
+$$
+perplexity=\mathrm{exp}\left(\frac{1}{m}\sum_{i=1}^{m}\ell_i \right)
+$$
+
+在很多情况下可以把 PPL 理解成：模型在每一步相当于在 $K$ 个选项里“平均在猜”，这个 $K$ 就是困惑度。举例：
+- 如果模型每步都像在 2 个词里均匀猜（正确词概率约 0.5）
+  $\ell \approx -\log 0.5 = 0.693$，ppl $=e^{0.693}\approx 2$
+- 如果每步正确词概率约 0.1
+  $\ell\approx 2.302)，ppl (=e^{2.302}\approx 10$
+
+所以 ppl 越大，说明模型越“困惑”，每一步要在更多可能里徘徊。
+
+
+### 4.2 随机梯度下降优化器
+现在我们有了损失函数，接下来将开始探索优化器。最简单的基于梯度的优化器是随机梯度下降（SGD）。我们从随机初始化的参数 $\theta_0$ 开始。然后对于每一步 $t=0,\ldots,T-1$，执行以下更新：
+$$
+\theta_{t+1} \leftarrow \theta_t - \alpha_t \nabla L(\theta_t; B_t),
+$$
+
+其中 $B_t$ 是从数据集 $D$ 中采样的随机批量数据，学习率 $α_t$ 和批量大小 $|Bt|$ 是超参数。
+
+#### 4.2.1 在 PyTorch 中实现 SGD
+要实现我们的优化器，我们将继承 PyTorch 的 `torch.optim.Optimizer` 类。一个 `Optimizer` 子类必须实现两个方法：
+- `def __init__(self, params, ...)` 应初始化优化器。`params` 将是需要优化的参数集合（或参数组，如果用户想为模型的不同部分使用不同的超参数，例如不同的学习率）。确保将 params 传递给基类的 `__init__` 方法，该方法会将这些参数存储起来以供后续步骤使用。你可以根据优化器的需求添加额外的参数（例如，学习率是一个常见参数），并将它们**作为字典传递给基类构造函数**，字典中的键是你为这些参数选择的名称（字符串）。
+- `def step(self)` 应执行一次参数更新。在训练循环中，这个方法会在反向传播后被调用，因此你可以访问到上一批数据的梯度。该方法应遍历每个参数张量 `p` 并就地修改它们，即设置 `p.data`，它保存了与该参数相关的张量，基于梯度 `p.grad`（如果存在的话）——该梯度是相对于该参数的损失梯度张量。
+
+PyTorch 优化器 API 有一些微妙之处，所以用一个例子来解释会更简单。为了使示例更丰富，我们将实现 SGD 的一个变体，其中学习率随训练过程衰减，从一个初始学习率 $\alpha$ 开始，随着时间推移逐步缩小步长：
+$$
+\theta_{t+1} = \theta_t - \frac{\alpha}{\sqrt{t+1}} \nabla L(\theta_t; B_t),
+$$
+
+让我们看看如何将这个版本的 SGD 实现为 PyTorch Optimizer：
+- 在 `__init__` 中，我们将参数以及默认的超参数传递给基类构造函数（参数可能以组的形式出现，每组具有不同的超参数）。如果参数只是单个 `torch.nn.Parameter` 对象的集合，基类构造函数将创建一个单独的组并将其分配给默认超参数。
+- 在 `step` 中，我们迭代每个参数组，然后对组内的每个参数应用上述公式。在这里，我们将迭代次数作为状态与每个参数关联：首先读取此值，将其用于梯度更新，然后更新它。API 规定用户可能会传入一个可调用的 closure 来重新计算优化器步骤之前的损失。我们不需要为此优化器使用它，但为了符合 API，我们将其添加进来。
+
+要查看其工作原理，我们可以使用以下最小化训练循环示例：
+```python
+from collections.abc import Callable, Iterable
+from typing import Optional
+import torch
+import math
+
+class SGD(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3):
+        """
+        简易SGD优化器，学习率按 sqrt(t+1) 衰减
+        把要优化的参数收起来，并存好默认超参数（比如学习率 lr）
+        把参数组织成 self.param_groups（参数组）
+        把默认超参数也放进每个 group 里（所以后面能 group["lr"]）
+        """
+        if lr < 0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        defaults = {"lr": lr}
+        super().__init__(params, defaults)
+    
+    def step(self, closure: Optional[Callable] = None):
+        """
+        执行一次参数更新
+        支持可选的闭包函数用于重新计算模型
+        """
+        loss = None if closure is None else closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]  # 当前参数组的学习率
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p]  # 获取参数状态（用于记录迭代次数）
+                step_count = state.get("step_count", 0)  # 读取当前步数，初始为0
+                grad = p.grad.data  # 梯度数据
+
+                # 更新参数：权重衰减因子为 1/sqrt(step_count + 1)
+                p.data -= lr / math.sqrt(step_count + 1) * grad
+
+                # 步数递增并保存回状态
+                state["step_count"] = step_count + 1
+
+        return loss
+
+
+# ------------------- 测试代码 -------------------
+weights = torch.nn.Parameter(5 * torch.randn((10, 10)))  # 初始化可学习参数
+opt = SGD([weights], lr=1)  # 创建优化器
+
+for t in range(100):
+    opt.zero_grad()              # 清零梯度
+    loss = (weights**2).mean()   # 定义目标：最小化权重平方均值
+    print(loss.cpu().item())     # 打印当前损失
+    loss.backward()              # 反向传播计算梯度
+    opt.step()                   # 更新参数
+```
+
+**问题（learning_rate_tuning）：调整学习率（1分）**
+我们将看到，对训练影响最大的超参数之一就是学习率。让我们在之前的SGD示例中实践这一点：将学习率分别设置为1e1、1e2和1e3，仅运行10次训练迭代。对于每个学习率，损失值如何变化？它是下降得更快、更慢，还是发散（即在训练过程中损失值增加）？
+提交内容：用一到两句话描述你观察到的现象。
+
+在这个二次损失的测试里，**lr=1e1** 时 loss 稳定、逐步下降；**lr=1e2** 时一开始会出现一次“翻转”导致 loss 基本不变，但随后会在几步内迅速下降到接近 0；而 **lr=1e3** 时更新步长过大，loss 很快爆炸式增大并发散。
+
+### 4.3 AdamW
+现代语言模型通常使用比SGD更复杂的优化器进行训练。最近广泛使用的优化器大多源自 Adam 优化器 [Kingma 和 Ba, 2015]。我们将使用 AdamW [Loshchilov 和 Hutter, 2019]，这是近期研究中广泛采用的一种优化器。AdamW 对 Adam 进行了改进，通过引入权重衰减（在每次迭代中将参数向0拉近）来提升正则化效果，并且该权重衰减与梯度更新解耦。我们将按照 Loshchilov 和 Hutter [2019]论文中算法2的描述来实现 AdamW。
+
+AdamW 是有状态的：对每个参数，它会维护其一阶和二阶矩的滑动估计值。因此，AdamW 以额外的内存消耗为代价，换取了更好的训练稳定性和收敛性。除了学习率 $\alpha$ 外，AdamW 还包含一对控制矩估计更新的超参数 ($\beta_1, \beta_2$)，以及一个权重衰减率 $\lambda$。通常情况下，($\beta_1, \beta_2$) 设为 (0.9, 0.999)，但像 LLaMA [Touvron 等, 2023] 和 GPT-3 [Brown 等, 2020] 这样的大语言模型通常使用 (0.9, 0.95)。该算法可表述如下，其中 $\epsilon$ 是一个很小的值（例如 $10^{-8}$），用于在 $v$ 出现极小值时提升数值稳定性：
+![](../figures/fig7.png)
+请注意，$t$ 从 1 开始。现在，您将实现此优化器。
+
+**问题（adamw）：实现 AdamW（2 分）**
+提交要求：将 AdamW 优化器实现为 `torch.optim.Optimizer` 的子类。你的类在 `__init__` 中应接收学习率 $\alpha$，以及超参数 $\beta_1$、$\beta_2$、$\epsilon$ 和 $\lambda$。为了帮助你维护状态，基类 Optimizer 提供了一个字典 `self.state`，它将 `nn.Parameter` 对象映射到一个字典，用于存储该参数所需的任何信息（对 AdamW 而言，即一阶和二阶矩估计值）。
+
+代码可见[adamw.py](hw4/adamw.py)
+
+**问题（adamwAccounting）：使用 AdamW 训练的资源核算（2 分）**
+让我们计算运行 AdamW 所需的内存和计算量。假设所有张量均使用 float32（每个元素占 4 字节）。
+
+---
+(a) 运行 AdamW 所需的峰值内存是多少？请根据参数、激活值（activations）、梯度和优化器状态的内存使用情况分解回答。用 batch_size 和模型超参数（vocab_size、context_length、num_layers、d_model、num_heads）表示你的答案。假设 d_ff = 4 × d_model。为简化激活值的内存计算，仅考虑以下组件：
+- Transformer 块：
+  - RMSNorm(s)
+  - 多头自注意力子层：QKV 投影、QᵀK 矩阵乘法、softmax、加权求和（value 加权和）、输出投影
+  - 位置前馈网络（FFN）：W1 矩阵乘法、SiLU 激活、W2 矩阵乘法
+- 最终的 RMSNorm
+- 输出嵌入（output embedding）
+- logits 上的交叉熵损失
+
+提交要求：分别给出参数、激活值、梯度和优化器状态的代数表达式，以及总内存的表达式。
+
+---
+(b) 将你的答案代入一个 GPT-2 XL 规模的模型，得到仅依赖于 batch_size 的表达式。在不超过 80GB 内存的前提下，最大 batch_size 是多少？
+提交要求：形如 a·batch_size + b 的表达式（其中 a、b 为具体数值），以及最大 batch_size 的数值。
+
+---
+(c) 运行一步 AdamW 需要多少次浮点运算（FLOPs）？
+提交要求：一个代数表达式，并附简要说明。
+
+---
+(d) 模型 FLOPs 利用率（Model FLOPs Utilization, MFU）定义为实际吞吐量（每秒处理的 token 数）与硬件理论峰值 FLOPs 吞吐量的比值 [Chowdhery et al., 2022]。一块 NVIDIA A100 GPU 的 float32 峰值性能为 19.5 teraFLOP/s。假设你能达到 50% 的 MFU，训练一个 GPT-2 XL 模型，共 400K 步，每步 batch_size = 1024，在单块 A100 上需要多长时间？根据 Kaplan et al. [2020] 和 Hoffmann et al. [2022] 的假设，反向传播的 FLOPs 是前向传播的两倍。
+
+提交要求：训练所需的天数，并附简要说明。
+
+### 4.4 学习率调度
+导致损失最快减少的学习率值在训练过程中常常会发生变化。在训练 Transformer 模型时，通常采用学习率调度策略：先使用较大的学习率，在训练初期进行更快速的更新，再随着模型的训练逐渐将其衰减至较小的值。在本作业中，我们将实现用于训练 LLaMA 的余弦退火调度策略 [Touvron et al., 2023]。
+
+调度器本质上是一个函数，它接收当前步数 $t$ 和其他相关参数（如初始学习率和最终学习率），并返回在第 $t$ 步梯度更新时应使用的学习率。最简单的调度器是常函数，它会针对任意 $t$ 返回相同的学习率。
+
+余弦退火学习率调度器需要以下输入：(i) 当前迭代次数 $t$，(ii) 最大学习率 $\alpha_{max}$，(iii) 最小（最终）学习率 $\alpha_{min}$，(iv) 预热迭代次数 $T_w$，以及 (v) 余弦退火迭代次数 $T_c$。第 $t$ 次迭代时的学习率定义如下：
+- **预热阶段**：若 $t < T_w$，则 $\alpha_t = \frac{t}{T_w}\,\alpha_{\max}.$
+- **余弦退火阶段**：若 $T_w \le t \le T_c$，则 $\alpha_t = \alpha_{\min} + \frac{1}{2}\left(1+\cos\!\left(\frac{t-T_w}{T_c-T_w}\pi\right)\right)(\alpha_{\max}-\alpha_{\min}).$
+
+- **退火后阶段**：若 $t > T_c$，则 $\alpha_t = \alpha_{\min}.$
+
+**问题（learning_rate_schedule）：实现带预热的余弦学习率调度**
+编写一个函数，该函数接收参数 $t$（当前训练步数）、$\alpha_{max}$（最大学习率）、$\alpha_{min}$（最小学习率）、$T_w$（预热步数）和 $T_c$（总训练步数），并根据上述定义的学习率调度策略返回当前步数对应的学习率 $α_t$。
+
+代码可见[lr_cosine_shedule.py](hw4/lr_cosine_shedule.py)
+
+
+### 4.5 梯度裁剪
+在训练过程中，我们有时会遇到产生较大梯度的训练样本，这可能会导致训练不稳定。为缓解这一问题，实践中常用的一种技术是梯度裁剪（gradient clipping）。其核心思想是在每次反向传播后，对梯度的范数施加一个上限。
+
+给定所有参数的梯度 $g$，我们计算其 $\ell_2$-范数$\lVert g\rVert_2$。如果该范数小于最大值 $M$，则保持 $g$ 不变；否则，我们将 $g$ 缩放因子为 $\frac{M}{\lVert g\rVert_2+\epsilon}$（其中添加了一个很小的 $\epsilon$ ，如 $10^{−6}$，以确保数值稳定性）。注意，缩放后的范数将略小于 $M$。
+
+**问题（gradient_clipping）：实现梯度裁剪（1 分）**
+编写一个函数来实现梯度裁剪。你的函数应该接收一组参数和一个最大 $\ell_2$-范数，并就地修改每个参数的梯度。使用 $\epsilon=10^{−6}$（这是 PyTorch 的默认值）。
+
+代码可见[gradient_clip.py](hw4/gradient_clip.py)
+
+
+## 5 训练与生成
+我们来到了 Training loop 和 Generating text 部分，我们将最终整合迄今为止构建的主要组件：分词后的数据、模型和优化器。
+
+### 5.1 数据加载（Data Loader）
+分词后的数据（例如你在 tokenizer_experiments 中准备的数据）是一个单一的 token 序列 $x = (x_1, \ldots, x_n)$。尽管原始数据可能由多个独立的文档组成（例如不同的网页或源代码文件），一种常见的做法是将所有这些文档连接成一个单一的 token 序列，并在它们之间添加一个分隔符（例如 $\text{<|endoftext|>}$ token）。
+
+数据加载器会将这个长序列转换为一批批的数据流，其中每个批次包含 $B$ 个长度为 $m$ 的序列，以及对应的下一个 token 序列（长度也为 $m$）。例如，当 $B$ = 1，$m$ = 3 时，$([x_2, x_3, x_4], [x_3, x_4, x_5])$ 就是一个可能的批次。
+
+以这种方式加载数据在多个方面简化了训练过程。首先，任何满足 $1 \le i < n − m$ 的位置 $i$ 都可以生成一个有效的训练序列，因此序列的采样非常简单。由于所有训练序列长度相同，无需进行填充操作，这提高了硬件利用率（同时也可以增大批次大小 $B$）。最后，我们也不必一次性将整个数据集全部加载到内存中即可进行训练样本的抽取，从而更容易处理那些可能无法完全放入内存的大型数据集。
+
+**问题（data_loading）：实现数据加载（2分）**
+交付要求：编写一个函数，该函数接收一个 numpy 数组 $x$（包含 token ID 的整数数组）、batch_size、context_length 和一个 PyTorch 设备字符串（例如 'cpu' 或 'cuda:0'），并返回一对张量：采样的输入序列及其对应的下一个 token 目标。这两个张量的形状都应为 (batch_size, context_length)，包含 token ID，并且都应放置在指定的设备上。
+
+低资源/降级训练提示：在 CPU 上进行数据加载
+如果你计划在 CPU 上训练你的语言模型，你需要将数据移动到正确的设备上（同样地，之后你的模型也应使用相同的设备）。如果使用 CPU，可使用设备字符串 'cpu'。
+
+代码可见[dataloader.py](hw5/dataloader.py)
+
+如果数据集太大而无法全部加载到内存中怎么办？我们可以使用一个名为 mmap 的 Unix 系统调用，它能将磁盘上的文件映射到虚拟内存，并在访问对应内存位置时才加载文件内容。因此，你可以“假装”整个数据集已经在内存中了。NumPy 通过 np.memmap 提供了这一功能（或者在使用 np.load 时设置参数 mmap_mode='r'，前提是你之前是用 np.save 保存的数组），这会返回一个类数组对象，只有在你访问具体元素时才会按需加载数据。
+
+在训练过程中从数据集（即 NumPy 数组）采样时，务必以内存映射模式加载数据集（通过 np.memmap 或 np.load 的 mmap_mode='r' 参数，具体取决于你保存数组的方式）。同时，请确保指定的 dtype 与你所加载的数组的原始数据类型一致。为确保安全，建议显式验证内存映射的数据是否正确（例如，检查数据中是否包含超出预期词表大小的非法 token ID 值）
+
+### 5.2 检查点（Checkpointing）
+除了加载数据外，我们还需要在训练过程中保存模型。在运行训练任务时，我们常常希望能够在训练中途意外停止后（例如由于任务超时、机器故障等）恢复训练。即使一切顺利，我们也可能希望之后能够访问训练过程中的中间模型（例如，事后研究训练动态、从不同训练阶段的模型中生成样本等）。
+
+一个检查点（checkpoint）应包含所有能够恢复训练所需的状态。最基本的是，我们必须能够恢复模型的权重。如果使用了带有状态的优化器（例如 AdamW），我们还需要保存优化器的状态（例如，AdamW 中的动量估计值）。最后，为了能够恢复学习率调度，我们还需要知道训练停止时所处的迭代次数。PyTorch 使得保存这些信息变得非常简单：每个 `nn.Module` 都有一个 `state_dict()` 方法，它会返回一个包含所有可学习参数的字典；之后我们可以通过对应的 `load_state_dict()` 方法恢复这些权重。优化器 `torch.optim.Optimizer` 也同样支持 `state_dict()` 和 `load_state_dict()` 方法。最后，`torch.save(obj, dest)` 可以将一个对象（例如，字典，其值中包含张量，也可以包含整数等普通 Python 对象）序列化并保存到文件（路径）或类文件对象中，之后可以通过 `torch.load(src)` 将其重新加载回内存。
+
+**问题（checkpointing）：实现模型检查点保存与加载（1分）**
+实现以下两个函数，用于保存和加载模型检查点：
+`def save_checkpoint(model, optimizer, iteration, out)` 应将前三个参数中的所有状态保存到文件类对象 out 中。你可以使用模型和优化器的 `state_dict` 方法获取它们的相关状态，并使用 `torch.save(obj, out)` 将 obj 保存到 out（PyTorch 支持路径或文件类对象）。一个常见的做法是让 obj 是一个字典，但你也可以使用任何格式，只要之后能够成功加载你的检查点即可。
+
+该函数需要以下参数：
+- model: torch.nn.Module
+- optimizer: torch.optim.Optimizer
+- iteration: int
+- out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
+
+`def load_checkpoint(src, model, optimizer)` 应从 src（路径或文件类对象）加载检查点，并恢复模型和优化器的状态。你的函数应返回保存在检查点中的迭代次数。你可以使用 `torch.load(src)` 来读取你在 save_checkpoint 中保存的内容，并通过模型和优化器的 `load_state_dict` 方法将它们恢复到之前的状态。
+
+该函数需要以下参数：
+- src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
+- model: torch.nn.Module
+- optimizer: torch.optim.Optimizer
+
+代码可见[checkpoint.py](hw5/checkpoint.py)
+
+### 5.3 训练循环
+现在，是时候将你之前实现的所有组件整合到你的主训练脚本中了。为了方便后续多次运行训练（以研究不同参数选择对训练的影响），建议将训练过程配置为可通过命令行参数轻松启动，并支持不同的超参数设置。
+
+**问题（training_together）：整合所有组件（4分）**
+交付要求： 编写一个脚本，运行训练循环，使用用户提供的输入来训练你的模型。具体来说，我们建议你的训练脚本至少具备以下功能：
+- 可配置和控制各种模型及优化器的超参数。
+- 使用 np.memmap 以内存高效的方式加载大型训练和验证数据集。
+- 将检查点序列化保存到用户指定的路径。
+- 定期记录训练和验证性能（例如，输出到控制台和/或外部服务如 Weights and Biases）。
+
+代码可见[training_loop.py](hw5/training_loop.py)
+
+## 6 生成文本（Generating text）
+现在我们已经可以训练模型了，最后需要实现的功能就是如何从模型中生成文本。回想一下，语言模型接收一个（可能是批量的）长度为 sequence_length 的整数序列，并输出一个大小为 (sequence_length $\times$ 词汇表大小) 的矩阵，其中序列的每个位置对应一个概率分布，用于预测该位置之后的下一个词。接下来，我们将编写几个函数，将这种输出转化为生成新序列的采样方法。
+
+**Softmax** 
+按照常规，语言模型的输出是最终线性层的输出（即“logits”），因此我们需要通过 softmax 操作将其转换为归一化的概率分布。
+
+**解码** 
+为了从模型生成文本（即解码），我们会先提供一段前缀 token 序列（即“提示”或 prompt），让模型输出一个在整个词汇表上的概率分布，以预测序列的下一个词。然后，我们将从该词汇表的概率分布中进行采样，以确定下一个输出 token。
+
+具体来说，解码过程的一步应输入一个序列 $x_{1\ldots t}$，并通过以下公式返回一个标记 $x_{t+1}$：
+$$
+P(x_{t+1}=i \mid x_{1:t})
+= \frac{\exp(v_i)}{\sum_j \exp(v_j)} .
+$$
+
+其中
+$$
+v = \mathrm{TransformerLM}(x_{1:t})_t \in \mathbb{R}^{\text{vocab\_size}} .
+$$
+
+这里，$\mathrm{TransformerLM}$ 是我们的模型，它以长度为 sequence_length 的序列作为输入，并输出一个大小为 (sequence_length × vocab_size) 的矩阵。我们取该矩阵的最后一个元素，因为我们关注的是在第 $t$ 个位置的下一个词预测。
+
+这为我们提供了一个基本的解码器，通过不断从这些单步条件概率中进行采样（将先前生成的输出标记添加到下一个解码时间步的输入中），直到生成序列结束标记（或达到用户指定的最大生成标记数量）为止。
+
+**解码器的实现** 
+我们将使用小型模型进行实验，而小型模型有时会生成质量很低的文本。两种简单的解码技巧可以帮助解决这些问题。首先，在温度调节（temperature scaling）中，我们通过引入一个温度参数 $\tau$ 来调整我们的 softmax 函数，新的 softmax 公式为：
+$$
+\mathrm{softmax}(v,\tau)_i
+= \frac{\exp(v_i/\tau)}{\sum_{j=1}^{\text{vocab\_size}} \exp(v_j/\tau)} .
+$$
+
+请注意，当设置 $\tau\rightarrow 0$ 时，会使向量 $v$ 中的最大元素占据主导地位，softmax 的输出会变成一个集中在该最大元素上的 one-hot 向量。
+
+其次，另一种技巧是 nucleus（核采样）或 top-p 采样，它通过截断低概率词汇来修改采样分布。设 $q$ 是从一个（经过温度缩放的）softmax 得到的概率分布，其大小为 vocab_size。使用超参数 $p$ 的 nucleus 采样根据以下公式生成下一个 token：
+$$
+P(x_{t+1}=i \mid q) =
+\begin{cases}
+\dfrac{q_i}{\sum_{j\in V(p)} q_j}, & i\in V(p),\\[6pt]
+0, & \text{otherwise}.
+\end{cases}
+$$
+
+其中，$V(p)$ 是满足 $\sum_{j\in V(p)} q_j \ge p$ 的最小索引集合。通过首先按概率大小对分布 $q$ 进行排序，然后选择最大的词汇项累加概率，直到累积概率达到目标值 $p$ 来计算这个集合。这样能避免采到太低概率的怪词，同时又保留随机性。
+
+**问题（decoding）：解码（3分）**
+交付内容：实现一个从你的语言模型中进行解码的函数。我们建议你支持以下功能：
+- 为用户提供提示词生成补全内容（即输入一段文本 $x_{1\ldots t}$，然后采样生成后续内容，直到生成结束标记 ）。
+- 允许用户控制生成的最大 token 数量。
+- 给定一个指定的温度值，对预测的下一个词分布应用 softmax 温度缩放后再进行采样。
+- 支持 Top-p 采样（Holtzman 等，2020；也称为核采样），给定用户指定的阈值。
+
+代码可见[inference.py](hw6/inference.py)
+
+## 7 Experiments
+现在是时候将所有内容整合起来，并在预训练数据集上训练（小型）语言模型了。
+
+### 7.1 如何运行实验并提交成果
+要真正理解 Transformer 架构组件背后的设计原理，最好的方法就是亲自修改并运行它。动手实践是无可替代的。
+
+为此，能够快速、一致地进行实验，并记录下所做的一切至关重要。为了实现快速实验，我们将使用一个小型模型（1700万参数）和一个简单的数据集（TinyStories）进行多次小规模实验。为了确保实验的一致性，你需要以系统化的方式对各个组件进行消融分析，并调整超参数。同时，为了保留实验记录，我们要求你提交一份实验日志，以及每次实验对应的学习曲线。
+
+为了能够提交损失曲线，请务必定期评估验证集上的损失，并记录训练的步数和实际耗时（wallclock time）。你可能会发现像 Weights and Biases 这样的日志记录工具非常有帮助。
+
+**问题（experiment_log）：实验日志记录（3分）**
+为你的训练和评估代码建立实验跟踪基础设施，以便能够根据梯度更新步数（gradient steps）和实际耗时（wallclock time）来追踪实验过程和损失曲线。
+交付内容：实验的日志记录基础设施代码，以及一份实验日志（即本节后续作业问题中你所尝试的所有内容的记录文档）。
+
+### 7.2 TinyStories
+我们将从一个非常简单的数据集（TinyStories；Eldan 和 Li，2023）开始，在该数据集上模型训练速度很快，同时我们也能观察到一些有趣的行为。获取该数据集的说明请参见第1节。
+
+**超参数调优**
+我们会为你提供一些基本的超参数作为起点，然后请你通过实验找出其他超参数的良好设置。
+- **vocab_size（词汇表大小）**: 10000。典型的词汇表大小通常在几万到几十万之间。你可以尝试调整该值，观察词汇表大小对模型行为的影响。
+- **context_length（上下文长度）**: 256。像 TinyStories 这样的简单数据集可能不需要很长的序列长度，但在后续使用 OpenWebText 数据时，你可能需要调整该值。尝试改变上下文长度，观察其对每次迭代的运行时间和最终困惑度（perplexity）的影响。
+- **d_model（模型维度）**: 512。这比许多小型 Transformer 论文中常用的 768 维略小，但可以加快训练速度。
+- **d_ff（前馈网络维度）**: 1344。这大约是 d_model 的 8/3 倍，同时是 64 的倍数，有利于 GPU 性能优化。
+- **RoPE theta 参数（Θ）**: 10000。
+- **层数与注意力头数**: 4 层，16 个注意力头。这样的配置总共约有 1700 万个非嵌入参数，是一个相对较小的 Transformer 模型。
+- **总处理 token 数**: 327,680,000（你的 batch size × 总训练步数 × 上下文长度 应大致等于该值）。
+
+你需要通过一些试错，为以下超参数找到合适的默认值：
+- 学习率（learning rate）
+- 学习率预热步数（learning rate warmup）
+- 其他 AdamW 超参数（$\beta_1$, $\beta_2$, $\epsilon$）
+- 权重衰减（weight decay）
+
+这些超参数的典型取值可参考 Kingma 和 Ba [2015] 的论文。
+
+**整合所有内容**
+现在，你可以将所有部分整合起来：获取一个训练好的 BPE 分词器，对训练数据集进行分词，并在你编写的训练循环中运行模型。
+重要提示：如果你的实现正确且高效，上述超参数在 1 块 H100 GPU 上的运行时间应大约为 30–40 分钟。如果你的运行时间显著更长，请检查你的数据加载、模型保存或验证损失计算代码是否存在性能瓶颈，并确保你的实现已正确地进行了批处理（batched）。
+
+代码可见[final_train.py](hw7/final_train.py)
+
+**文本生成**
+现在你已经拥有了训练好的解码器，我们可以开始生成文本了！我们将基于模型进行文本生成，并评估其生成质量。作为参考，你生成的文本至少应达到如下示例的水平：
+示例（ts_generate_example）：TinyStories 语言模型的生成样本
+![](../figures/fig8.png)
+**低资源/降配提示：在 CPU 或 Apple Silicon 上生成文本**
+如果你使用的是低资源配置（仅处理了 4000 万个 token），你生成的文本应仍能大致符合英语语法结构，但流畅度和连贯性不如上述高资源训练的模型。例如，我们在 40M token 配置下训练的 TinyStories 语言模型生成的样本如下：
+![](../figures/fig9.png)
+
+**问题（generate）：生成文本（1分）**
+使用你的解码器和训练好的检查点，报告你的模型生成的文本。你可能需要调整解码器参数（如温度、top-p 等）以获得流畅的输出。
+交付内容：至少 256 个 token 的文本输出（或直到第一个 token 为止），以及一段简要评论，说明该输出的流畅程度，以及至少两个影响此输出质量好坏的因素。
+
+代码可见[final_inference.py](hw7/final_inference.py)
+
+### 7.3 消融实验与架构修改
+理解 Transformer 的最佳方式就是实际修改它，并观察其行为变化。现在我们将进行一些简单的消融实验和架构修改。
+
+**消融实验1：层归一化（layer normalization）**
+人们常说，层归一化对 Transformer 训练的稳定性至关重要。但也许我们想“铤而走险”。现在，让我们从每个 Transformer 模块中移除 RMSNorm，然后观察会发生什么。
+
+**问题（layer_norm_ablation）：移除 RMSNorm 并训练（1分）（1 H100 小时）**
+从你的 Transformer 中移除所有 RMSNorm 层并进行训练。在之前的最优学习率下会发生什么？你能否通过使用更低的学习率来获得稳定性？
+交付内容：移除 RMSNorm 后进行训练的学习曲线，以及使用最佳学习率时的学习曲线。
+交付内容：几句关于 RMSNorm 影响的简要评论。
+
+---
+
+现在让我们研究另一种在第一眼看来似乎随意的层归一化选择。Pre-norm Transformer块定义为：
+$$
+z = x + \mathrm{MultiHeadedSelfAttention}(\mathrm{RMSNorm}(x))
+$$$$
+y = z + \mathrm{FFN}(\mathrm{RMSNorm}(z)).
+$$
+
+这是对原始Transformer架构少数几个“共识”修改之一，原始架构采用的是post-norm方法，其形式如下：
+$$
+z = \mathrm{RMSNorm}\!\left(x + \mathrm{MultiHeadedSelfAttention}(x)\right)
+$$$$
+y = \mathrm{RMSNorm}\!\left(z + \mathrm{FFN}(z)\right).
+$$
+
+让我们回到post-norm方法，看看会发生什么。
+
+**问题（pre_norm_ablation）：实现并训练后归一化模型（1分）（1个H100小时）**
+将你的预归一化Transformer实现修改为后归一化。使用后归一化模型进行训练，观察会发生什么。
+交付成果：后归一化Transformer的学习曲线，并与预归一化模型进行比较。
+
+我们看到，层归一化对Transformer的行为有重大影响，甚至层归一化的位置也非常重要。
+
+---
+
+**消融实验2：位置嵌入**
+接下来，我们将研究位置嵌入对模型性能的影响。具体来说，我们将把基础模型（使用RoPE）与完全不包含位置嵌入（NoPE）的情况进行比较。事实证明，仅解码器的Transformer（即我们所实现的带有因果掩码的模型）理论上可以在没有显式提供位置嵌入的情况下推断出相对或绝对的位置信息 [Tsai et al., 2019, Kazemnejad et al., 2023]。现在我们将通过实验验证NoPE与RoPE相比的表现如何。
+
+**问题（no_pos_emb）：实现无位置嵌入（NoPE）（1分）（1个H100小时）**
+将你使用RoPE的Transformer实现修改为完全移除位置嵌入信息，观察会发生什么。
+交付成果：一条对比RoPE与NoPE性能的学习曲线。
+
+---
+
+**消融实验3：SwiGLU 与 SiLU**
+接下来，我们将遵循 Shazeer [2020] 的方法，通过比较使用 SwiGLU 的前馈网络与仅使用 SiLU 激活函数但不包含门控线性单元（GLU）的前馈网络的性能，来测试前馈网络中门控机制的重要性：
+$$
+\mathrm{FFN}_\mathrm{SLU}(x)=W_2\mathrm{SiLU}(W_1x)
+$$
+
+回顾一下，在我们的 SwiGLU 实现中，我们将内部前馈层的维度设置为大约 $d_{ff}=\frac{8}{3}d_{model}$（同时确保 $d_{ff}~mod~64=0$，以便利用 GPU 的张量核心）。在你的 $\mathrm{FFN}_\mathrm{SLU}$ 实现中，应将 $d_{ff}=4 \times d_{model}$，以大致匹配 SwiGLU 前馈网络的参数数量（SwiGLU 使用三个权重矩阵，而此处为两个）。
+
+**问题（swiglu_ablation）：SwiGLU 与 SiLU 对比（1分）（1个H100小时）**
+交付成果：一条对比 SwiGLU 与 SiLU 前馈网络性能的学习曲线，两者参数量大致相当。
+交付成果：几句话，简要讨论你的发现。
+低资源/降规模提示：在线且GPU资源有限的学生应在TinyStories上测试修改
+
+在本作业的后续部分，我们将转向更大规模、噪声更多的网络数据集（OpenWebText），实验不同的架构修改，并（可选）向课程排行榜提交结果。
+在OpenWebText上将语言模型训练到流利程度需要很长时间，因此我们建议GPU资源有限的在线学生继续在TinyStories上测试修改（使用验证损失作为评估性能的指标）。
+
+### 7.4 OpenWebText
+我们现在将转向一个更为标准的、由网络爬取数据构建的预训练数据集。OpenWebText [Gokaslan et al., 2019] 的一个小样本也以单个文本文件的形式提供：参见第1节了解如何访问该文件。
+注意：你可能需要为此实验重新调整你的超参数，例如学习率或批量大小。
+
+**问题（main_experiment）：在OWT上的实验（2分）（3个H100小时）**
+使用与TinyStories相同的模型架构和总训练步数，在OpenWebText上训练你的语言模型。该模型表现如何？
+
+交付成果：你的语言模型在OpenWebText上的学习曲线。描述与TinyStories相比损失值的差异——我们应如何解释这些损失？
+
+交付成果：从OpenWebText语言模型生成的文本，格式与TinyStories的输出相同。这段生成文本的流畅性如何？尽管我们使用了与TinyStories相同的模型和计算预算，为什么输出质量更差？
