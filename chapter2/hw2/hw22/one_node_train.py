@@ -20,15 +20,15 @@ def train(model, device, train_loader, optimizer, epoch):
 def main():
     # 设置随机种子确保可重现性
     seed = 42
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
+    torch.manual_seed(seed)  # 固定 PyTorch CPU 操作的随机性
+    torch.cuda.manual_seed(seed)  # 固定当前GPU的随机性
+    torch.cuda.manual_seed_all(seed)  # 固定所有GPU的随机性
+    np.random.seed(seed)  # 固定numpy的随机性
+    random.seed(seed)  # 固定Python内置random模块的随机性
     
-    # 设置确定性行为
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # 设置确定性行为，强制PyTorch使用确定性的算法（可能会牺牲性能）
+    torch.backends.cudnn.deterministic = True  # 确保每次运行得到相同的结果
+    torch.backends.cudnn.benchmark = False  # 禁止使用基于输入数据的优化算法，以确保结果可重现
     
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")

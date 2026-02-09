@@ -28,6 +28,7 @@ class SimpleNet(nn.Module):
         x = self.layers[-1](x)
         
         return F.log_softmax(x, dim=1)
+    
 
 class DDPOverlapBucketed(nn.Module):
     def __init__(self, module: torch.nn.Module, bucket_size_mb: float):
@@ -43,8 +44,6 @@ class DDPOverlapBucketed(nn.Module):
         self._create_bucket()
         self._reigster_hook()
 
-    
-    
     def _broadcast_parameters(self):
         """
         将rank 0的参数广播到所有其他进程，确保所有进程都有相同的初始参数
@@ -52,37 +51,35 @@ class DDPOverlapBucketed(nn.Module):
         if self.world_size > 1:
             for param in self.module.parameters():
                 dist.broadcast(param.data, src=0)
-    
+
     def _create_bucket(self):
         current_bucket_size = 0
         current_bucket = []
         for p in reversed(list(self.module.parameters())):
             if p.requires_grad:
                 p_size = p.numel() * p.element_size()
-                if p_size + current_bucket_size > self.bucket_size_bytes and current_bucket:#当前的桶已经满了，保存当前的桶，并创建新的桶,中间变量清0
+                if p_size + current_bucket_size > self.bucket_size_bytes and current_bucket:  # 当前的桶已经满了，保存当前的桶，并创建新的桶,中间变量清0
                     self.buckets.append(current_bucket)
                     current_bucket_size = 0
                     current_bucket = []
                 current_bucket.append(p)
                 current_bucket_size += p_size
-        #最后如果还有剩余的桶没满，也保存到桶s中
+        
         if current_bucket:  # 只有当桶不为空时才添加
             self.buckets.append(current_bucket)
         
         for i, bucket_params in enumerate(self.buckets):
             if not bucket_params:  # 检查桶是否为空
                 continue
-            #创建一个缓冲区，记录每一个桶的梯度的元素的数量
+            # 创建一个缓冲区，记录每一个桶的梯度的元素的数量
             buffer_size = sum(p.numel() for p in bucket_params)
             buffer = torch.zeros(buffer_size, device=bucket_params[0].device, dtype=bucket_params[0].dtype)
             self.buckets[i] = {
-                "params": bucket_params,
-                "buffer": buffer,
-                "ready_params": set(),
-                "triggered": False
+                "params": bucket_params,  # 这个 bucket 里包含哪些参数（按反向顺序分组）
+                "buffer": buffer,         # 扁平化的梯度缓冲区（把这些参数的 grad 拼起来）
+                "ready_params": set(),    # 反向过程中：哪些参数的 grad 已经 ready
+                "triggered": False        # 这个 bucket 的 all-reduce 是否已经发起过（防重复）
             }
-    
-
     
     def _reigster_hook(self):
         for bucket_idx, bucket_info in enumerate(self.buckets):
@@ -121,6 +118,7 @@ class DDPOverlapBucketed(nn.Module):
             # 这确保在所有梯度计算完成后再执行同步
             import torch.autograd as autograd
             autograd.Variable._execution_engine.queue_callback(delayed_sync)
+
     def forward(self, x):
         #每次forward之前，清空桶的触发状态和ready_params
         if self.world_size > 1:
@@ -150,7 +148,7 @@ class DDPOverlapBucketed(nn.Module):
                 numel = p.numel()
                 # 确保param.grad存在，然后用缓冲区的数据覆盖它
                 if p.grad is not None:
-                    p.grad.view(-1).copy_(buffer[offset:offset+numel])#将缓冲区的数据写回每个参数
+                    p.grad.view(-1).copy_(buffer[offset:offset+numel])  # 将缓冲区的数据写回每个参数
                 offset += numel
         
         # 清除handles，为下一次迭代做准备

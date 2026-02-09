@@ -35,7 +35,7 @@ def benchmark_all_reduce(rank, world_size, tensor_size_mb, backend, device, mast
     num_elements = tensor_size_bytes // 4
     tensor_data = torch.randn(num_elements, device=device)
 
-    # 3. 预热 (Warm-up)，非常重要！
+    # 3. 预热 (Warm-up)，非常重要！让 GPU 从休眠/低功耗状态唤醒，充满流水线，消除首次运行时的初始化开销，确保后续测量的稳定性。
     # 按照作业要求，预热5次
     for _ in range(5):
         dist.all_reduce(tensor_data, op=dist.ReduceOp.SUM)
