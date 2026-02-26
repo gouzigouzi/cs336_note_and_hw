@@ -1,7 +1,6 @@
 import re
 
 def run_mask_emails(text: str) -> tuple[str, int]:
-
     # 业界标准的邮箱正则表达式
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 

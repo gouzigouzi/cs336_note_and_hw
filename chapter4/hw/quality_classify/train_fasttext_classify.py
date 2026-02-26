@@ -182,7 +182,7 @@ def main():
     merged_file = str(script_dir / "quality_train_merged.txt")
     train_file = str(script_dir / "quality_train.txt")
     val_file = str(script_dir / "quality_val.txt")
-    model_path = str(script_dir / "quality_classifier.bin")
+    model_path = str(script_dir / "final_quality_classifier.bin")
     
     # 步骤1: 合并正负样本
     total_samples = merge_and_shuffle_samples(

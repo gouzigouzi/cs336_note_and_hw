@@ -1,3 +1,5 @@
+from nltk.tokenize import word_tokenize
+
 def check_word_count(words: list[str]) -> bool:
     "检查单词数量是否在50到100000之间"
     count = len(words)
@@ -22,11 +24,9 @@ def check_aplhabet_ratio(words: list[str]) -> bool:
 
 
 def run_gopher_quality_filter(text: str) -> bool:
-
-
     #先分词
-    # words = nltk.word_tokenize(text)
-    words = text.split()
+    words = word_tokenize(text)
+    # words = text.split()
 
     # result1 = check_word_count(words)
     # result2 = check_mean_word_length(words)
@@ -34,4 +34,4 @@ def run_gopher_quality_filter(text: str) -> bool:
     # result4 = check_aplhabet_ratio(words)   
     
     # print(f"word_count: {result1}, avg_len: {result2}, ellipsis: {result3}, alpha: {result4}")
-    return check_aplhabet_ratio(words) and check_ellipsis_ratio(text) and check_word_count(words) and check_mean_word_length(words)
+    return check_mean_word_length(words) and check_word_count(words) and check_ellipsis_ratio(text) and check_aplhabet_ratio(words)
