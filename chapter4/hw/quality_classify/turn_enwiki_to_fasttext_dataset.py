@@ -63,13 +63,14 @@ def read_extracted_files(extracted_dir: str) -> Generator[dict, None, None]:
             
             try:
                 with open(wiki_file, 'r', encoding='utf-8') as f:
+                    # 逐行读取 (JSONL格式，每一行是一个完整的JSON对象)
                     for line in f:
                         line = line.strip()
                         if not line:
                             continue
                         try:
-                            article = json.loads(line)
-                            yield article #惰性迭代，每次只返回一个article
+                            article = json.loads(line)  # 将字符串解析为 Python 字典
+                            yield article  # 惰性迭代，每次只返回一个article。函数运行到这里会暂停，把 article 返回给调用者。下次调用者需要数据时，函数会从暂停的地方继续运行。
                         except json.JSONDecodeError:
                             continue
             except Exception as e:

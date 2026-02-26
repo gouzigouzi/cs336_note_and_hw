@@ -32,7 +32,6 @@ def desensitize_text(text: str) -> str:
     return text
 
 
-
 def extract_text_from_warc_record(record) -> Optional[str]:
     """
     从WARC记录中提取纯文本

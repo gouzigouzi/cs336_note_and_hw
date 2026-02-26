@@ -216,5 +216,9 @@ wget –-timeout=5 \
 (a) 训练一个质量分类器，给定文本后返回数值型质量分数。
 交付成果：一个用于下一子题的质量分类器。
 
+代码可见 [train_fasttext_classify.py](train_fasttext_classify.py)。其中正样本构建是从 wiki 提取结果读文本，脱敏 + Gopher 规则过滤，输出 `__label__hq ...`，代码可见 [turn_enwiki_to_fasttext_dataset.py](turn_enwiki_to_fasttext_dataset.py)。负样本构建是从 CC WARC 抽取 HTML 文本，脱敏，输出 `__label__lq ...`，代码可见[turn_cc_to_fasttext_dataset.py](turn_cc_to_fasttext_dataset.py)。这里使用的正负样本标签是hq和lq。
+
 (b) 编写一个函数，将页面标记为高质量或低质量，并提供该标签的置信度分数。
 交付成果：编写一个函数，仅接收一个字符串作为参数，返回包含标签（高质量或非高质量）和置信度分数的二元组。实现适配器 `[run_classify_quality]`。作为合理性检查，请运行 `uv run pytest -k test_classify_quality`，确保其能正确分类我们提供的两个示例。
+
+代码可见 [classify_quality.py](classify_quality.py)。使用上述训练的质量分类器，返回的正负样本标签是hq和lq。
