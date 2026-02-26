@@ -15,14 +15,14 @@ def normalize_text(text: str) -> str:
     5.应用NFD unicode规范化。
     """
     text = text.lower()
-    text = re.sub(r'[^\w\s]', '', text)#\w表示字母数字下划线，\s表示空白字符，取反后就表示标点符号
-    text = re.sub(r'\s+', ' ', text).strip()#\s+表示一个或多个空白字符，替换为单个空格
-    #先标准化，把原有的重音分解为基字符和重音符号
+    text = re.sub(r'[^\w\s]', '', text)  # \w表示字母数字下划线，\s表示空白字符，取反后就表示标点符号
+    text = re.sub(r'\s+', ' ', text).strip()  # \s+表示一个或多个空白字符，替换为单个空格
+    # 先标准化，把原有的重音分解为基字符和重音符号
     text = normalize('NFD', text)
-    #然后删除重音符号
+    # 然后删除重音符号
     text = "".join(
     ch for ch in text
-    if unicodedata.category(ch) != "Mn" #Mn表示变音符号
+    if unicodedata.category(ch) != "Mn"  # Mn表示变音符号
     )
     
     return text
@@ -36,8 +36,7 @@ def get_shingles(text: str, n: int) -> list[str]:
 
 def estimate_jaccard(sig1: list, sig2: list) -> float:
     """
-    根据两个MinHash签名，估算Jaccard相似度。
-    这对应你笔记中的：“相等行的数量 / 总行数 K”
+    根据两个MinHash签名，估算Jaccard相似度：“相等行的数量 / 总行数 K”
     """
     if len(sig1) != len(sig2):
         raise ValueError("Signatures must have the same length.")
@@ -46,6 +45,7 @@ def estimate_jaccard(sig1: list, sig2: list) -> float:
     matching_hashes = sum(1 for h1, h2 in zip(sig1, sig2) if h1 == h2)
     
     return matching_hashes / len(sig1)
+
 def run_minhash_deduplication(
     input_files: list[os.PathLike],
     num_hashes: int,
@@ -57,17 +57,17 @@ def run_minhash_deduplication(
     """主函数:实现MinHash去重"""
     # 第一步，先读取文件，并进行预备工作处理。
     doc_shingles = defaultdict(set)
-    all_shingles = set()# 所有出现过的shingle,也就是所有文档的并集
+    all_shingles = set()  # 所有出现过的shingle,也就是所有文档的并集
     for file_path in input_files:
         with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read()
             normalized_text = normalize_text(text)
             shingles = get_shingles(normalized_text, ngrams)
             doc_shingles[file_path] = shingles
-            all_shingles.update(shingles) # 收集所有出现过的shingle
+            all_shingles.update(shingles)  # 收集所有出现过的shingle
             # print(shingles)
     
-    #第二步，生成MinHash签名
+    # 第二步，生成MinHash签名
     # 初始化签名矩阵 M，所有值为无穷大
     # signatures[doc_id] = [inf, inf, ..., inf]，相当于按列来创建矩阵
     signatures = {doc_id: [float('inf')] * num_hashes for doc_id in doc_shingles}
@@ -127,7 +127,7 @@ def run_minhash_deduplication(
         adj[doc1].append(doc2)
         adj[doc2].append(doc1)
         
-    # 2. 寻找连通分量 (即重复的集群)
+    # 2. 寻找连通分量 (即重复的集群)（BFS广度优先搜索）
     clusters = []
     visited = set()
     for doc in input_files:
