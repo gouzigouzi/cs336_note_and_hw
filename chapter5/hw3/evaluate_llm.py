@@ -16,12 +16,12 @@ Assistant: <think>"""
 
 
 def evaluate_vllm(
-vllm_model: LLM,
-reward_fn: Callable[[str, str], dict[str, float]],
-prompts: List[str],
-eval_sampling_params: SamplingParams,
-ground_truths: List[str],
-output_file: str
+    vllm_model: LLM,
+    reward_fn: Callable[[str, str], dict[str, float]],
+    prompts: List[str],
+    eval_sampling_params: SamplingParams,
+    ground_truths: List[str],
+    output_file: str
 ) -> None:
     """
     Evaluate a language model on a list of prompts,
@@ -64,19 +64,19 @@ if __name__ == "__main__":
     # 使用本地模型目录
     MODEL_PATH = str((project_root / "models" / "Qwen2.5-Math-1.5B").resolve())
 
-    # 设置采样参数
+    # 设置采样参数，控制 vLLM 模型在文本生成时的解码策略
     sampling_params = SamplingParams(
         temperature=1.0,
         top_p=1.0,
         max_tokens=1024,
-        stop=["</answer>"], # 遇到结束标签即停止
+        stop=["</answer>"],  # 遇到结束标签即停止
         include_stop_str_in_output=True
     )
 
     validation_file = project_root / "MATH" / "validation.jsonl"
     with open(validation_file, "r") as f:
         data = [json.loads(line) for line in f]
-    #提取出问题和答案
+    # 提取出问题和答案
     prompts = [PROMPTS_TEMPLATE.format(question=item["problem"]) for item in data]
     ground_truths = [item["answer"] for item in data]
     
