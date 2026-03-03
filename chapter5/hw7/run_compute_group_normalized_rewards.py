@@ -1,6 +1,6 @@
 from typing import Callable
-
 import torch
+
 def run_compute_group_normalized_rewards(
     reward_fn: Callable,
     rollout_responses: list[str],

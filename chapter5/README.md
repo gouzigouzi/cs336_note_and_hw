@@ -730,3 +730,133 @@ GRPO 目标函数融合了三项核心思想：
 
 ![](../figures/fig15.png)
 
+首先，我们给出完整的 GRPO-Clip 目标函数，再解释裁剪操作的作用：
+![](../figures/fig16.png)
+
+超参数 $\epsilon>0$ 用于控制策略的更新幅度。为更直观理解，我们参考 Achiam [2018a,b]的方法重写逐 token 目标函数。定义函数：
+$$
+g\left(\epsilon, A^{(i)}\right)=
+\begin{cases}
+(1+\epsilon)A^{(i)}, & \text{if } A^{(i)}\ge 0,\\
+(1-\epsilon)A^{(i)}, & \text{if } A^{(i)}< 0.
+\end{cases} \tag{30}
+$$
+
+则逐 token 目标函数可重写为：
+$$
+\text{per-token objective}=
+\min\!\left(
+\frac{\pi_{\theta}\!\big(o^{(i)}_{t}\mid q, o^{(i)}_{<t}\big)}
+     {\pi_{\theta_{\mathrm{old}}}\!\big(o^{(i)}_{t}\mid q, o^{(i)}_{<t}\big)}A^{(i)},
+\;
+g\left(\epsilon, A^{(i)}\right)
+\right).
+$$
+
+我们分情况讨论：
+- 当优势值 $A(i)$ 为正时，逐 token 目标函数简化为：
+$$
+\text{per-token objective}=\min\!\left(
+\frac{\pi_{\theta}\!\big(o^{(i)}_{t}\mid q, o^{(i)}_{<t}\big)}
+     {\pi_{\theta_{\mathrm{old}}}\!\big(o^{(i)}_{t}\mid q, o^{(i)}_{<t}\big)},
+\,1+\epsilon
+\right)A^{(i)}.
+$$
+由于 $A^{(i)}>0$，若动作 $o_{t}^{(i)}$ 在 $\pi_{\theta}$ 下的概率增大（即 ${\pi_{\theta}\left(o_{t}^{(i)} | q, o_{<t}^{(i)}\right)}$)的值变大），目标函数值会增加。min 函数的裁剪作用限制了目标函数的增长幅度：当 ${\pi_{\theta}\left(o_{t}^{(i)} | q, o_{<t}^{(i)}\right)} > (1+\epsilon){\pi_{\theta_{old}}\left(o_{t}^{(i)} | q, o_{<t}^{(i)}\right)}$) 时，逐 token 目标函数达到最大值 $(1+\epsilon)A(i)$，从而避免策略 $\pi_\theta$ 与旧策略 $\pi_{\theta_{old}}$ 偏差过大。
+
+- 当优势值 $A(i)$ 为负时，模型会尝试降低 ${\pi_{\theta}\left(o_{t}^{(i)} | q, o_{<t}^{(i)}\right)}$ 的概率，但裁剪机制会阻止其降至 $(1-\epsilon){\pi_{\theta_{old }}\left(o_{t}^{(i)} | q, o_{<t}^{(i)}\right)}$ 以下（完整推导参见Achiam [2018b]）。
+
+### 7.2 Implementation
+在理解 GRPO 的训练流程和目标函数后，我们开始分模块实现。SFT 和 EI 部分的许多模块可直接复用。
+
+**计算优势值（组归一化奖励）Computing advantages (group-normalized rewards)**
+首先实现 a rollout batch 中每个样本的优势值计算逻辑，即组归一化奖励。我们考虑两种组归一化方式：1. 前文公式 28 的标准方法. 2. 近期提出的简化方法。
+Dr. GRPO [Liu et al., 2025] 指出，通过 $std(r(1), r(2), \dots, r(G))$ 进行归一化的方式，会奖励答案正确性波动较小的问题，而这可能并不理想。因此，他们提出移除标准差归一化步骤，直接计算：
+$$A^{(i)} = r^{(i)} - \text{mean}\left(r^{(1)}, r^{(2)}, ..., r^{(G)}\right) \tag{31}$$
+
+我们将实现两种变体，并在后续实验中对比其性能。
+
+**问题（compute_group_normalized_rewards）：组归一化（2分）**
+交付要求：实现 `compute_group_normalized_rewards` 方法，计算每个滚动响应的原始奖励，在组内进行归一化，并返回归一化奖励、原始奖励及有用的元数据。
+推荐接口：
+```python
+def compute_group_normalized_rewards(
+    reward_fn: Callable[[str, str], dict[str, float]],
+    rollout_responses,
+    repeated_ground_truths,
+    group_size,
+    advantage_eps,
+    normalize_by_std,
+):
+    """为每组 rollout 响应计算奖励，并按组进行归一化。
+
+    参数：
+    reward_fn: Callable[[str, str], dict[str, float]]  
+        用于将 rollout 响应与标准答案（ground truth）进行比较并打分的函数，返回一个字典，
+        包含键 "reward"、"format_reward" 和 "answer_reward"。
+    
+    rollout_responses: list[str]  
+        策略生成的 rollout 响应列表。该列表长度为 rollout_batch_size，
+        即 rollout_batch_size = n_prompts_per_rollout_batch * group_size。
+    
+    repeated_ground_truths: list[str]  
+        每个样本对应的标准答案列表。该列表长度也为 rollout_batch_size，
+        因为每个问题的标准答案被重复了 group_size 次（与每个问题对应的多个响应对齐）。
+    
+    group_size: int  
+        每个问题（即每组）生成的响应数量。
+    
+    advantage_eps: float  
+        用于归一化时避免除零的小常数。
+    
+    normalize_by_std: bool  
+        若为 True，则用每组奖励的标准差进行归一化（即减去均值后除以标准差）；
+        否则仅减去组内均值。
+
+    返回：
+    tuple[torch.Tensor, torch.Tensor, dict[str, float]]
+        - advantages: shape (rollout_batch_size,)，每条 rollout 响应的组内归一化奖励（即优势值）。
+        - raw_rewards: shape (rollout_batch_size,)，每条 rollout 响应的原始未归一化奖励。
+        - metadata: 用户自定义的其他统计信息，可用于日志记录（例如奖励的均值、标准差、最大/最小值等）。
+    """
+```
+测试方法：实现 `[adapters.run_compute_group_normalized_rewards]`，运行命令 `uv run pytest -k test_compute_group_normalized_rewards` 并确保测试通过。
+
+代码可见 [run_compute_group_normalized_rewards.py](hw7\run_compute_group_normalized_rewards.py)
+
+**朴素策略梯度损失**
+接下来实现损失计算相关方法。需注意：这些并非传统意义上的损失函数，不应作为评估指标。在强化学习中，应跟踪训练集和验证集的回报值等指标（详见6.5节讨论）。
+
+首先实现朴素策略梯度损失，该损失直接将优势值与动作的对数概率相乘并取负。对于问题 q、响应 o 和响应 token $o_t$，逐 token 朴素策略梯度损失为：
+$$-A_{t} \cdot \log p_{\theta}\left(o_{t} | q, o_{<t}\right) \tag{32}$$
+
+**问题（compute_naive_policy_gradient_loss）：朴素策略梯度（1分）**
+交付要求：实现 `compute_naive_policy_gradient_loss` 方法，使用原始奖励或预计算的优势值计算逐 token 策略梯度损失。
+推荐接口：
+```python
+def compute_naive_policy_gradient_loss(
+    raw_rewards_or_advantages: torch.Tensor,
+    policy_log_probs: torch.Tensor,
+) -> torch.Tensor:
+    """
+    计算每个token的策略梯度损失，其中raw_rewards_or_advantages可为原始奖励或已归一化的优势值
+    
+    参数：
+        raw_rewards_or_advantages: 形状为(batch_size, 1)的张量，每个滚动响应的标量奖励/优势值
+        policy_log_probs: 形状为(batch_size, sequence_length)的张量，每个token的对数概率
+    
+    返回：
+        形状为(batch_size, sequence_length)的张量，逐token策略梯度损失（将在训练循环中跨批次和序列维度聚合）
+    """
+```
+实现提示：
+- 将 raw_rewards_or_advantages 在 sequence_length 维度上广播（broadcast）
+
+测试方法：实现 `[adapters.run_compute_naive_policy_gradient_loss]`，运行命令 `uv run pytest -k test_compute_naive_policy_gradient_loss` 并确保测试通过。
+
+代码可见 [run_compute_naive_policy_gradient_loss.py](hw7\run_compute_naive_policy_gradient_loss.py)
+
+
+
+
+
