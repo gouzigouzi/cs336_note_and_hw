@@ -25,11 +25,11 @@ HW4_ROOT = PROJECT_ROOT / "hw4"
 if str(HW4_ROOT) not in sys.path:
     sys.path.insert(0, str(HW4_ROOT))
 
-from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
-from run_get_response_log_probs import run_get_response_log_probs
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn  # 评估模型输出和 ground truth 之间的匹配程度，返回一个 dict 包含 "reward" 键。
+from hw4.run_get_response_log_probs import run_get_response_log_probs
 # hw4/run_tokenize_prompt_and_output.py uses this name in annotations.
 builtins.PreTrainedTokenizerBase = PreTrainedTokenizerBase
-from run_tokenize_prompt_and_output import run_tokenize_prompt_and_output
+from hw4.run_tokenize_prompt_and_output import run_tokenize_prompt_and_output
 from run_compute_group_normalized_rewards import run_compute_group_normalized_rewards
 from run_grpo_microbatch_train_step import run_grpo_microbatch_train_step
 from run_masked_mean import run_masked_mean
@@ -78,6 +78,7 @@ class GRPOConfig:
 
 
 def load_jsonl(path: str) -> list[dict[str, Any]]:
+    """Load a JSONL file and return a list of dictionaries."""
     with open(path, "r", encoding="utf-8") as f:
         return [json.loads(line) for line in f]
 
@@ -89,9 +90,9 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
     llm_kwargs: dict[str, Any] = {
         "model": model_id,
         "dtype": "bfloat16" if torch.cuda.is_available() else "float32",
-        "enable_prefix_caching": True,
-        "gpu_memory_utilization": gpu_memory_utilization,
-        "trust_remote_code": True,
+        "enable_prefix_caching": True,  # 这个选项可以让 vLLM 在生成过程中缓存前缀的计算结果，避免重复计算，提高采样效率。对于 GRPO 训练来说，由于每个 rollout batch 中的样本共享同一个 prompt 前缀，启用 prefix caching 可以显著加速采样过程。
+        "gpu_memory_utilization": gpu_memory_utilization,  # 这个选项可以让 vLLM 更好地利用 GPU 内存，减少 out-of-memory 的风险。根据实际情况调整这个值，可以在保证不 OOM 的前提下尽可能提高 GPU 内存的利用率，从而提升采样效率。
+        "trust_remote_code": True,  # 如果模型来自 Hugging Face Hub，并且模型作者提供了自定义的 vLLM 适配代码（比如针对某些特殊架构的优化），这个选项可以让 vLLM 信任并使用这些远程代码，从而获得更好的性能和兼容性。
     }
     if "device" in llm_init_sig.parameters:
         llm_kwargs["device"] = device
@@ -99,6 +100,7 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
     def _construct_llm() -> LLM:
         return LLM(**llm_kwargs)
 
+    # 由于 vLLM 的某些版本在启用 profiling 时会有一个内存占用断言（_assert_memory_footprint_increased_during_profiling），这个断言在 GRPO 训练过程中可能会被误触发，导致不必要的错误。这里我们通过 patch 的方式暂时禁用这个断言，以确保 GRPO 训练过程的稳定性。
     enable_profiling_patch = False
     try:
         worker_mod = importlib.import_module("vllm.worker.worker")
@@ -107,6 +109,7 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
     except Exception:
         enable_profiling_patch = False
 
+    # 无论是否启用 profiling_patch，都需要 patch get_world_size 返回 1，确保 vLLM 在单机单卡模式下正常运行，避免某些版本的 vLLM 在没有正确初始化分布式环境时出现错误。
     with world_size_patch:
         if enable_profiling_patch:
             with patch(
@@ -123,6 +126,7 @@ def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM) -> None:
     """
     state_dict = policy.state_dict()
     llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+    # # vllm 会自动处理底层的显存拷贝以及设备间转移，我们只需要把权重以 CPU 张量的形式提供给 vLLM，vLLM 会根据自己的设备配置来加载和使用这些权重。
     llm_model.load_weights(state_dict.items())
 
 
@@ -133,6 +137,7 @@ def sample_prompt_batch(
     """
     从训练示例中采样一个 batch 的 prompt 和对应的 ground truth 答案。每个 rollout batch 需要 n_prompts_per_rollout_batch 个不同的问题（prompt），每个问题会被 vLLM 采样 group_size 个答案。
     """
+    # 如果训练示例的数量不足以提供 n_prompts_per_rollout_batch 个不同的问题，那么就允许重复采样一些问题，直到凑够数量。这种设置可以确保在训练初期或者数据量较小的情况下，GRPO 训练过程仍然能够顺利进行，而不会因为缺乏足够的训练示例而报错。
     if len(train_examples) >= n_prompts_per_rollout_batch:
         batch = random.sample(train_examples, k=n_prompts_per_rollout_batch)
     else:
@@ -239,7 +244,7 @@ def collect_rollout_examples(
     """
     examples: list[dict[str, Any]] = []
     n_groups = len(rollout_responses) // group_size
-    max_groups = min(n_groups, num_example_rollouts)
+    max_groups = min(n_groups, num_example_rollouts)  # 最多只记录 num_example_rollouts 个组的示例，避免记录过多导致输出过大。
     for group_idx in range(max_groups):
         start = group_idx * group_size
         end = start + group_size
@@ -263,11 +268,14 @@ def parse_int_csv(text: str, n_grpo_steps: int) -> set[int]:
     把配置里的字符串 example_rollout_steps（比如 "1,50,100"）解析成 set[int]，用于决定“哪些 step 要保存 rollout 示例”。
     """
     if text.strip() == "":
-        return {1, max(1, n_grpo_steps // 2), n_grpo_steps}
-    return {int(x.strip()) for x in text.split(",") if x.strip()}
+        return {1, max(1, n_grpo_steps // 2), n_grpo_steps} # 如果用户没有指定具体的 step，那么默认保存初始状态（step 1）、中间状态（step n_grpo_steps // 2）和最终状态（step n_grpo_steps）的示例，确保能观测到训练过程中的关键阶段。
+    return {int(x.strip()) for x in text.split(",") if x.strip()}  # 用户指定了具体的 step，那么就按照用户的配置来解析，允许用户灵活地选择想要保存示例的 step，可以是任意的整数，只要在训练总步数范围内即可。
 
 
 def save_validation_plot(val_history: list[dict[str, Any]], output_path: Path) -> None:
+    """"
+    根据验证历史记录绘制验证奖励随 GRPO 训练步骤变化的曲线，并保存到指定路径。如果 matplotlib 没有安装，则跳过绘图步骤。
+    """
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError:
@@ -297,6 +305,9 @@ def run_grpo_train_loop(
     reward_fn: Callable[[str, str], dict[str, float]],
     cfg: GRPOConfig,
 ) -> dict[str, Any]:
+    """
+    GRPO 训练循环的核心实现
+    """
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
 
@@ -314,13 +325,13 @@ def run_grpo_train_loop(
     assert cfg.train_batch_size % cfg.gradient_accumulation_steps == 0, (
         "train_batch_size must be divisible by gradient_accumulation_steps"
     )
-    #每一道题会采样 group_size 个答案，所以 rollout_batch_size 也必须是 group_size 的整数倍，才能保证每个 rollouts batch 中的样本能被整齐划分成若干个 group。
+    # 每一道题会采样 group_size 个答案，所以 rollout_batch_size 也必须是 group_size 的整数倍，才能保证每个 rollouts batch 中的样本能被整齐划分成若干个 group。
     assert cfg.rollout_batch_size % cfg.group_size == 0, "rollout_batch_size must be divisible by group_size"
     assert cfg.train_batch_size >= cfg.group_size, "train_batch_size must be >= group_size" #保证一个训练 batch 至少容得下一整组样本，避免“比一组还小”的极端设置。
 
     n_prompts_per_rollout_batch = cfg.rollout_batch_size // cfg.group_size
 
-    #采样总回答数必须能被训练batch size 整除
+    # 采样总回答数必须能被训练batch size 整除
     assert cfg.rollout_batch_size % cfg.train_batch_size == 0, (
         "rollout_batch_size must be divisible by train_batch_size"
     )
@@ -333,7 +344,7 @@ def run_grpo_train_loop(
     )
 
     micro_train_batch_size = cfg.train_batch_size // cfg.gradient_accumulation_steps
-    #这个的目的就是为了记录几个快照作为example示例，类似以抽样的方式来观测训练过程中模型输出和奖励的变化趋势。
+    # 这个的目的就是为了记录几个快照作为example示例，类似以抽样的方式来观测训练过程中模型输出和奖励的变化趋势。
     example_steps = parse_int_csv(cfg.example_rollout_steps, cfg.n_grpo_steps)
     # 创建输出目录
     output_dir = Path(cfg.output_dir)
@@ -351,15 +362,17 @@ def run_grpo_train_loop(
         sampling_temperature=cfg.eval_sampling_temperature,
         max_tokens=cfg.sampling_max_tokens,
     )
-    #用作训练时的记录
+    # 用作训练时的记录
     history["val"].append({"step": 0, "mean_reward": init_val_reward, "examples": init_examples})
     print(f"[val] step=0 mean_reward={init_val_reward:.4f}")
 
     optimizer_update_idx = 0
     for step in range(1, cfg.n_grpo_steps + 1):
         # Rollout with current policy.
+        # 跨卡同步：把 train_device 上最新的 policy 复制到 eval_device 的 vLLM 里
         load_policy_into_vllm_instance(policy, llm)
         questions, ground_truths = sample_prompt_batch(train_examples, n_prompts_per_rollout_batch)
+        # 扔给 eval_device 疯狂采样生成答案，每个问题生成 group_size 个答案，得到 rollout_responses。由于每个问题对应一个 ground truth 答案，所以 repeated_ground_truths 中的每个 ground truth 会重复 group_size 次，以对应每个生成的答案。
         repeated_prompts, rollout_responses, repeated_ground_truths = generate_rollouts(
             llm=llm,
             questions=questions,
@@ -399,6 +412,7 @@ def run_grpo_train_loop(
                 )
             )
 
+        # 将文本输入转换为模型可处理的张量格式，包括 input_ids、labels 和 response_mask。response_mask 用于指示哪些 token 是模型生成的回答部分，在计算 loss 时只关注这些部分。
         tokenized = run_tokenize_prompt_and_output(repeated_prompts, rollout_responses, tokenizer)
         input_ids = tokenized["input_ids"].to(device)
         labels = tokenized["labels"].to(device)
@@ -406,6 +420,7 @@ def run_grpo_train_loop(
         advantages = advantages.to(device).unsqueeze(-1)
         raw_rewards = raw_rewards.to(device).unsqueeze(-1)
 
+        # 如果使用了 clip 类型的 loss，那么在训练之前需要先计算出当前策略在这些输入上的 log probabilities，作为旧策略的 log probabilities，用于后续计算 clip loss。
         old_log_probs = None
         if cfg.loss_type == "grpo_clip":
             with torch.no_grad():
@@ -420,16 +435,19 @@ def run_grpo_train_loop(
         step_entropies: list[float] = []
         step_clip_fractions: list[float] = []
 
+        # 带着生成好的纯文本答案，回到 train_device 上去算 Loss 做更新
         # 最外层的循环目的是为了重复训练同一批 rollouts 多次（epochs_per_rollout_batch），以更充分地利用每次采样得到的数据。
         for _ in range(cfg.epochs_per_rollout_batch):
-            #把原始的索引顺序打乱，增加训练的随机性和稳定性。每次迭代都会生成一个新的随机排列 perm，然后按照这个排列来划分训练 batch 和 microbatch。
+            # 把原始的索引顺序打乱，增加训练的随机性和稳定性。每次迭代都会生成一个新的随机排列 perm，然后按照这个排列来划分训练 batch 和 microbatch。
             perm = torch.randperm(cfg.rollout_batch_size, device=device)
             # 第二层是按照batch一块一块练
             for batch_start in range(0, cfg.rollout_batch_size, cfg.train_batch_size):
+                # 取出当前这个宏观批次的索引
                 batch_indices = perm[batch_start : batch_start + cfg.train_batch_size]
+                # 清空优化器的梯度，准备干活
                 optimizer.zero_grad(set_to_none=True)
                 
-                #第三次循环，把大的batch再切成 microbatch，逐个计算 loss 并累积梯度，直到积累够 cfg.gradient_accumulation_steps 个 microbatches 的梯度才进行一次 optimizer.step() 更新模型。
+                # 第三次循环，把大的batch再切成 microbatch，逐个计算 loss 并累积梯度，直到积累够 cfg.gradient_accumulation_steps 个 microbatches 的梯度才进行一次 optimizer.step() 更新模型。
                 for micro_start in range(0, cfg.train_batch_size, micro_train_batch_size):
                     micro_indices = batch_indices[micro_start : micro_start + micro_train_batch_size]
                     outputs = run_get_response_log_probs(
@@ -454,12 +472,12 @@ def run_grpo_train_loop(
                     )
                     step_losses.append(loss.item() * cfg.gradient_accumulation_steps)
                     step_entropies.append(run_masked_mean(token_entropy, micro_response_mask, dim=None).item())
-                    #这个东西是用来记录有多少次模型的输出被 clip 掉了，反映了当前策略和旧策略的差距，clip 掉的越多说明更新越激进，可能不太稳定。
+                    # 这个东西是用来记录有多少次模型的输出被 clip 掉了，反映了当前策略和旧策略的差距，clip 掉的越多说明更新越激进，可能不太稳定。
                     if "clip_fraction" in metadata:
                         step_clip_fractions.append(
                             run_masked_mean(metadata["clip_fraction"], micro_response_mask, dim=None).item()
                         )
-                #原地梯度修改，防止梯度爆炸
+                # 原地梯度修改，防止梯度爆炸
                 grad_norm = float(torch.nn.utils.clip_grad_norm_(policy.parameters(), cfg.max_grad_norm).item())
                 optimizer.step()
                 optimizer_update_idx += 1
@@ -571,10 +589,12 @@ def main() -> None:
     train_examples = load_jsonl(cfg.train_file)
     val_examples = load_jsonl(cfg.val_file)
 
+    # 加载 tokenizer 和 policy 模型
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # 这里我们直接用 AutoModelForCausalLM 来加载模型，因为 GRPO 训练过程中需要频繁地把模型权重加载到 vLLM 实例中进行采样，如果模型是 AutoModelForCausalLM 的子类，那么它的 state_dict 就能直接被 vLLM 加载和使用，避免了不必要的兼容性问题和潜在的错误。
     policy = AutoModelForCausalLM.from_pretrained(
         cfg.model_path,
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,

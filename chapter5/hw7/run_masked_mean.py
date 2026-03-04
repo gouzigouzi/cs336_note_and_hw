@@ -19,6 +19,6 @@ def run_masked_mean(tensor: torch.Tensor, mask: torch.Tensor, dim: int | None = 
     """
     # return torch.mean(tensor * mask,dim=dim)  这样写是把mask的总长度作为分母了。
     # 只对 mask=1 的位置求和；分母是 mask=1 的个数，不是该维总长度
-    masked_sum = (tensor * mask).sum(dim=dim)
-    masked_count = mask.sum(dim=dim)
+    masked_sum = (tensor * mask).sum(dim=dim)  # 对 mask=1 的位置求和
+    masked_count = mask.sum(dim=dim)  # 计算 mask=1 的个数
     return masked_sum / masked_count 

@@ -26,9 +26,9 @@ def run_compute_grpo_clip_loss(
                 (used to compute clip fraction).
     """
     # ratio = π/π_old = exp(log π - log π_old)
-    ratio = torch.exp(policy_log_probs - old_log_probs)
+    ratio = torch.exp(policy_log_probs - old_log_probs)  # shape: (batch_size, sequence_length)
     clipped_ratio = torch.clip(ratio, min=1.0 - cliprange, max=1.0 + cliprange)
-    unclipped = ratio * advantages
+    unclipped = ratio * advantages  # shape: (batch_size, sequence_length) 广播机制
     clipped = clipped_ratio * advantages
-    res = -torch.minimum(unclipped, clipped)#注意这里要逐元素进行比较，不能用min,这个只针对一个输入张量。
+    res = -torch.minimum(unclipped, clipped)  # 注意这里要逐元素进行比较，不能用min,这个只针对一个输入张量，新张量在每个位置上的值都是输入的两个张量对应位置的最小值。
     return res, {}
